@@ -1,7 +1,7 @@
 {
   "name": "postiexplorer",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Modern single-binary PostgreSQL explorer (Tauri v2 + React)",
   "license": "MIT",
   "author": "Jonas Grubbauer",
@@ -13,7 +13,14 @@
   "bugs": {
     "url": "https://github.com/JohnGrubba/postiexplorer/issues"
   },
-  "keywords": ["postgresql", "database", "explorer", "tauri", "sql", "desktop"],
+  "keywords": [
+    "postgresql",
+    "database",
+    "explorer",
+    "tauri",
+    "sql",
+    "desktop"
+  ],
   "engines": {
     "node": ">=18"
   },
