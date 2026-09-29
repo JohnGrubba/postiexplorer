@@ -24,28 +24,54 @@ Grab the latest installer from
 Releases are built automatically by [CI](.github/workflows/build.yml) on every
 push to `main` (rolling `latest` release — no tags needed). Or build locally — see [BUILD.md](BUILD.md).
 
-## Features (v0.1)
+## Screenshots
 
 ![connected database grid](screenshots/app-02-connected.png)
 ![database picker](screenshots/app-09-db-picker.png)
 ![SQL editor](screenshots/app-03-query.png)
 
-- Connection profiles (host, port, user, **optional database**, sslmode) with test-connection
-- Database picker: leave the database empty to connect via the `postgres` maintenance DB, then switch between all databases from the sidebar
-- Schema / table / view explorer with search + refresh
-- Table data grid: pagination (25–250/page), server-side LIMIT/OFFSET, click-to-sort, total count, execution time
-- Table structure: columns, types, nullable, defaults, PK badges
-- SQL editor: run with Ctrl+Enter, results grid, history (20), CSV export, timing + row count
-- Server info cards: version, size, tables, connections, uptime
-- Detailed connection errors with SQLSTATE codes (no more bare `db error`)
+More verified UI states in [`screenshots/`](screenshots/).
 
-All PostgreSQL access goes through `src-tauri/src/db.rs`. Every Tauri command in
-`src-tauri/src/main.rs` is a thin wrapper — new features only need a new function
-in `db.rs` + a new `#[tauri::command]` + a frontend call in `src/lib/api.ts`.
+## Features
 
-Stubbed for next milestones (UI placeholders + backend extension points already in place):
-functions, triggers, extensions, roles, EXPLAIN ANALYZE, multi-statement batches,
-ER diagram, import/export, TLS (`sslmode=require` — see `TLS TODO` in `db.rs`).
+### ✅ Implemented
+
+| Area | What you get |
+| ---- | ------------ |
+| **Connections** | Profiles (host, port, user, **optional database**, sslmode) with test-connection and latency; detailed errors with SQLSTATE codes (no bare `db error`) |
+| **Database picker** | Leave the database empty to land on the `postgres` maintenance DB, then switch databases from the sidebar without reconnecting manually |
+| **Explorer** | Schemas / tables / views / matviews / foreign tables with search, row estimates, sizes, and refresh |
+| **Data** | Paginated grid (25–250/page, server-side LIMIT/OFFSET), click-to-sort, totals + timing; insert / edit / delete rows via `RowEditorDialog` (ctid-addressed, works even without PKs; views are read-only) |
+| **Structure** | Columns, types, nullable, defaults, PK badges |
+| **ER Model** | Interactive diagram of all tables + FK edges: pan/zoom, drag-to-arrange, 3 auto-layouts (Grid / By schema / Hub & spokes), search + schema filter, click-to-isolate, SVG + Mermaid export |
+| **ER detail toggles** | Column types · nullability dots · defaults · row counts · views · isolated tables · relation labels · schema colours (persisted to localStorage) |
+| **Query** | SQL editor (Ctrl+Enter), results grid, 20-entry history, CSV export, timing + row counts |
+| **Server** | Version, database size, table count, connections, uptime cards |
+
+### ❌ Not yet implemented (roadmap)
+
+| Area | Status |
+| ---- | ------ |
+| Functions / procedures explorer | Planned |
+| Triggers explorer | Planned |
+| Extensions manager | Planned |
+| Roles / users manager | Planned |
+| EXPLAIN ANALYZE visualizer | Planned |
+| Multi-statement batches in editor | Planned |
+| Import / export (CSV, dump) | CSV export of query results done; full import/export planned |
+| TLS (`sslmode=require`) | Accepted + validated, still connects via `NoTls` — see `TLS TODO` in `src-tauri/src/db.rs` |
+
+Extension points for these already exist (`FutureModule` in `src/types.ts`;
+modular command layer in `src-tauri/src/db.rs`).
+
+## Architecture
+
+All PostgreSQL access lives in `src-tauri/src/db.rs`. Every Tauri command in
+`src-tauri/src/main.rs` is a thin wrapper — a new feature only needs:
+
+1. a new function in `db.rs`,
+2. a new `#[tauri::command]` in `main.rs`,
+3. a frontend call in `src/lib/api.ts` (+ mock in `src/lib/mock.ts` for web preview).
 
 ## Quick start (development)
 
@@ -68,8 +94,9 @@ npm run tauri dev      # header shows "desktop · live backend"
 
 ```
 src/                  React frontend
-  components/         Header, Sidebar, DataGrid, TableDataView, StructureView,
-                      QueryView, InfoView, ConnectionDialog, StatusBar
+  components/         Header, Sidebar, DataGrid, TableDataView, RowEditorDialog,
+                      StructureView, ErDiagramView, QueryView, InfoView,
+                      ConnectionDialog, StatusBar
   lib/api.ts          Tauri invoke wrapper + browser mock fallback
   lib/mock.ts         Demo dataset (used when Tauri IPC is absent)
   lib/profiles.ts     localStorage persistence
