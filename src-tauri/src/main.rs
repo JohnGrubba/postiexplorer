@@ -110,6 +110,11 @@ async fn get_server_info(state: tauri::State<'_, DbState>, connection_id: String
     db::op_server_info(&state, &connection_id).await
 }
 
+#[tauri::command]
+async fn get_er_model(state: tauri::State<'_, DbState>, connection_id: String) -> Result<ErModel, String> {
+    db::op_get_er_model(&state, &connection_id).await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -127,7 +132,8 @@ fn main() {
             insert_row,
             update_row,
             delete_rows,
-            get_server_info
+            get_server_info,
+            get_er_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

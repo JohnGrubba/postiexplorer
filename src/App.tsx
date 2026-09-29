@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Braces, Info, Table2 } from "lucide-react";
+import { Braces, Info, Network, Table2 } from "lucide-react";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import TableDataView from "./components/TableDataView";
 import StructureView from "./components/StructureView";
 import QueryView from "./components/QueryView";
 import InfoView from "./components/InfoView";
+import ErDiagramView from "./components/ErDiagramView";
 import ConnectionDialog from "./components/ConnectionDialog";
 import StatusBar from "./components/StatusBar";
 import { connect, disconnect, getConnectionId, listDatabases, listSchemas, listTables, testConnection } from "./lib/api";
@@ -138,6 +139,7 @@ export default function App() {
   const tabs: { id: MainTab; label: string; icon: typeof Table2 }[] = [
     { id: "data", label: "Data", icon: Table2 },
     { id: "structure", label: "Structure", icon: Braces },
+    { id: "er", label: "ER Model", icon: Network },
     { id: "query", label: "Query", icon: Braces },
     { id: "info", label: "Server", icon: Info },
   ];
@@ -212,7 +214,7 @@ export default function App() {
                 </button>
               ))}
               <div className="flex-1" />
-              {schema && table && tab !== "query" && tab !== "info" && (
+              {schema && table && (tab === "data" || tab === "structure") && (
                 <div className="hidden items-center truncate px-2 font-mono text-xs text-slate-500 lg:flex">
                   {schema}.{table}
                 </div>
@@ -222,6 +224,7 @@ export default function App() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               {tab === "data" && <TableDataView schema={schema} table={table} />}
               {tab === "structure" && <StructureView schema={schema} table={table} />}
+              {tab === "er" && <ErDiagramView key={currentDb ?? "none"} connected={connected} />}
               {tab === "query" && <QueryView />}
               {tab === "info" && <InfoView key={currentDb ?? "none"} connected={connected} />}
             </div>

@@ -77,7 +77,42 @@ export interface ServerInfo {
   max_connections: number;
 }
 
-export type MainTab = "data" | "structure" | "query" | "info";
+export type MainTab = "data" | "structure" | "query" | "info" | "er";
+
+export interface ErRelation {
+  constraint_name: string;
+  source_schema: string;
+  source_table: string;
+  source_column: string;
+  target_schema: string;
+  target_table: string;
+  target_column: string;
+}
+
+export interface ErTable {
+  schema: string;
+  name: string;
+  kind: string;
+  rows_estimate: number;
+  size_pretty: string;
+  columns: ColumnEntry[];
+}
+
+export interface ErModel {
+  tables: ErTable[];
+  relations: ErRelation[];
+}
+
+export interface ErDetailOptions {
+  showTypes: boolean;
+  showNullable: boolean;
+  showDefaults: boolean;
+  showRowCounts: boolean;
+  showViews: boolean;
+  showIsolated: boolean;
+  showRelationLabels: boolean;
+  colorBySchema: boolean;
+}
 
 // ── Extension points for future features (keep stable API) ──
 // Future modules should implement these interfaces:

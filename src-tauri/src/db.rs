@@ -717,3 +717,118 @@ pub async fn op_server_info(state: &DbState, connection_id: &str) -> Result<Serv
         max_connections: maxc.parse().unwrap_or(100),
     })
 }
+
+// ── ER model ───────────────────────────────────────────────────
+// Returns every user table/view (+ its columns) and every foreign-key
+// edge in one round-trip batch, so the frontend can render an ER diagram
+// without N+1 queries.
+
+pub async fn op_get_er_model(state: &DbState, connection_id: &str) -> Result<ErModel, String> {
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+
+    // 1) tables across all user schemas
+    let table_rows = client
+        .query(
+            "SELECT n.nspname,
+                    c.relname,
+                    CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view'
+                         WHEN 'm' THEN 'materialized_view' WHEN 'f' THEN 'foreign_table' ELSE 'table' END,
+                    COALESCE(c.reltuples::bigint, 0),
+                    pg_size_pretty(pg_total_relation_size(c.oid))
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname NOT IN ('pg_toast','pg_catalog','information_schema')
+               AND c.relkind IN ('r','v','m','f','p')
+             ORDER BY n.nspname, c.relname",
+            &[],
+        )
+        .await
+        .map_err(pg_err)?;
+
+    // 2) columns for all those tables in one query (PK flag via pg_constraint)
+    let col_rows = client
+        .query(
+            "SELECT col.table_schema, col.table_name, col.column_name, col.data_type,
+                    (col.is_nullable = 'YES'), col.column_default,
+                    EXISTS (SELECT 1 FROM pg_constraint con
+                            JOIN pg_class rel ON rel.oid = con.conrelid
+                            JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+                            JOIN unnest(con.conkey) AS k(attnum) ON true
+                            JOIN pg_attribute attr ON attr.attrelid = rel.oid AND attr.attnum = k.attnum
+                            WHERE con.contype = 'p'
+                              AND ns.nspname = col.table_schema
+                              AND rel.relname = col.table_name
+                              AND attr.attname = col.column_name)
+             FROM information_schema.columns col
+             WHERE col.table_schema NOT IN ('pg_toast','pg_catalog','information_schema')
+             ORDER BY col.table_schema, col.table_name, col.ordinal_position",
+            &[],
+        )
+        .await
+        .map_err(pg_err)?;
+
+    use std::collections::HashMap;
+    let mut cols_by_table: HashMap<(String, String), Vec<ColumnEntry>> = HashMap::new();
+    for r in col_rows {
+        let schema: String = r.get(0);
+        let table: String = r.get(1);
+        let entry = ColumnEntry {
+            name: r.get(2),
+            data_type: r.get(3),
+            is_nullable: r.get(4),
+            default_value: r.get(5),
+            is_primary: r.get(6),
+        };
+        cols_by_table.entry((schema, table)).or_default().push(entry);
+    }
+
+    let mut tables = Vec::with_capacity(table_rows.len());
+    for r in table_rows {
+        let schema: String = r.get(0);
+        let name: String = r.get(1);
+        let kind: String = r.get(2);
+        let rows_estimate: i64 = r.get(3);
+        let size_pretty: String = r.get(4);
+        let columns = cols_by_table.remove(&(schema.clone(), name.clone())).unwrap_or_default();
+        tables.push(ErTable { schema, name, kind, rows_estimate, size_pretty, columns });
+    }
+
+    // 3) foreign-key edges (one row per column pair, supports composite FKs)
+    let fk_rows = client
+        .query(
+            "SELECT con.conname,
+                    ns.nspname, cl.relname, a.attname,
+                    tns.nspname, tcl.relname, ta.attname
+             FROM pg_constraint con
+             JOIN pg_class cl ON cl.oid = con.conrelid
+             JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+             JOIN pg_class tcl ON tcl.oid = con.confrelid
+             JOIN pg_namespace tns ON tns.oid = tcl.relnamespace
+             JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+             JOIN pg_attribute a ON a.attrelid = cl.oid AND a.attnum = k.attnum
+             JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = k.ord
+             JOIN pg_attribute ta ON ta.attrelid = tcl.oid AND ta.attnum = fk.attnum
+             WHERE con.contype = 'f'
+               AND ns.nspname NOT IN ('pg_toast','pg_catalog','information_schema')
+               AND tns.nspname NOT IN ('pg_toast','pg_catalog','information_schema')
+             ORDER BY ns.nspname, cl.relname, k.ord",
+            &[],
+        )
+        .await
+        .map_err(pg_err)?;
+
+    let relations = fk_rows
+        .into_iter()
+        .map(|r| ErRelation {
+            constraint_name: r.get(0),
+            source_schema: r.get(1),
+            source_table: r.get(2),
+            source_column: r.get(3),
+            target_schema: r.get(4),
+            target_table: r.get(5),
+            target_column: r.get(6),
+        })
+        .collect();
+
+    Ok(ErModel { tables, relations })
+}

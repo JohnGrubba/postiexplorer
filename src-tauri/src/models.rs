@@ -45,7 +45,7 @@ pub struct TableEntry {
     pub size_pretty: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ColumnEntry {
     pub name: String,
     pub data_type: String,
@@ -87,4 +87,31 @@ pub struct ServerInfo {
     pub table_count: i64,
     pub connection_count: i64,
     pub max_connections: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ErTable {
+    pub schema: String,
+    pub name: String,
+    pub kind: String,
+    pub rows_estimate: i64,
+    pub size_pretty: String,
+    pub columns: Vec<ColumnEntry>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ErRelation {
+    pub constraint_name: String,
+    pub source_schema: String,
+    pub source_table: String,
+    pub source_column: String,
+    pub target_schema: String,
+    pub target_table: String,
+    pub target_column: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErModel {
+    pub tables: Vec<ErTable>,
+    pub relations: Vec<ErRelation>,
 }

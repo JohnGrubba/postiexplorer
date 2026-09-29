@@ -2,6 +2,7 @@ import type {
   ColumnEntry,
   ConnectionProfile,
   DatabaseEntry,
+  ErModel,
   QueryResult,
   SchemaEntry,
   ServerInfo,
@@ -135,6 +136,11 @@ export async function deleteRows(schema: string, table: string, ctids: string[])
 export async function getServerInfo(): Promise<ServerInfo> {
   if (!isTauri()) return mock.getServerInfo();
   return invoke<ServerInfo>("get_server_info", { connectionId });
+}
+
+export async function getErModel(): Promise<ErModel> {
+  if (!isTauri()) return mock.getErModel();
+  return invoke<ErModel>("get_er_model", { connectionId });
 }
 
 export { isTauri };

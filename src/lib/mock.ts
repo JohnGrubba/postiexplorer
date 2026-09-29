@@ -2,6 +2,7 @@ import type {
   ColumnEntry,
   ConnectionProfile,
   DatabaseEntry,
+  ErModel,
   QueryResult,
   SchemaEntry,
   ServerInfo,
@@ -244,6 +245,41 @@ export const mock = {
       table_count: 6,
       connection_count: 7,
       max_connections: 100,
+    };
+  },
+  async getErModel(): Promise<ErModel> {
+    await delay(250);
+    const tables: ErModel["tables"] = [
+      { schema: "public", name: "users", kind: "table", rows_estimate: 12480, size_pretty: "4.2 MB", columns: MOCK_COLUMNS["users"] },
+      { schema: "public", name: "orders", kind: "table", rows_estimate: 88410, size_pretty: "18.6 MB", columns: MOCK_COLUMNS["orders"] },
+      { schema: "public", name: "products", kind: "table", rows_estimate: 320, size_pretty: "256 kB", columns: MOCK_COLUMNS["products"] },
+      { schema: "public", name: "order_summary", kind: "view", rows_estimate: 0, size_pretty: "—", columns: MOCK_COLUMNS["order_summary"] },
+      { schema: "auth", name: "sessions", kind: "table", rows_estimate: 2100, size_pretty: "1.1 MB", columns: MOCK_COLUMNS["sessions"] },
+      { schema: "auth", name: "api_keys", kind: "table", rows_estimate: 84, size_pretty: "64 kB", columns: MOCK_COLUMNS["api_keys"] },
+      { schema: "billing", name: "invoices", kind: "table", rows_estimate: 5120, size_pretty: "2.4 MB", columns: MOCK_COLUMNS["invoices"] },
+    ];
+    return {
+      tables,
+      relations: [
+        {
+          constraint_name: "orders_user_id_fkey",
+          source_schema: "public",
+          source_table: "orders",
+          source_column: "user_id",
+          target_schema: "public",
+          target_table: "users",
+          target_column: "id",
+        },
+        {
+          constraint_name: "sessions_user_id_fkey",
+          source_schema: "auth",
+          source_table: "sessions",
+          source_column: "user_id",
+          target_schema: "public",
+          target_table: "users",
+          target_column: "id",
+        },
+      ],
     };
   },
   async insertRow(_schema: string, table: string, values: Record<string, unknown>): Promise<number> {
