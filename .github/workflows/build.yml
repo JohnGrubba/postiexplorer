@@ -2,6 +2,10 @@
 # bundles from ./releases/ as CI artifacts (and as a rolling GitHub
 # Release tagged `latest` on every push to main — no manual tags needed).
 #
+# Path-filtered (see `on.push/pull_request.paths`): docs, screenshots and
+# other non-build files don't trigger the three runners. Use "Run workflow"
+# (workflow_dispatch) to force a build anyway.
+#
 # Live-DB verification: the ubuntu job starts postgres:16 as a service,
 # seeds demo_db with seed.sql and runs the Rust integration tests
 # (src-tauri/tests/live_db.rs) before building.
@@ -11,7 +15,43 @@ name: build
 on:
   push:
     branches: [main]
+    # Only run the expensive multi-OS build when files that actually feed
+    # into it changed. Docs, screenshots, licenses etc. must not burn
+    # three runners + a rolling release. `workflow_dispatch` below is
+    # unaffected and always allows a manual run.
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig.json'
+      - 'tsconfig.node.json'
+      - 'postcss.config.js'
+      - 'tailwind.config.js'
+      - 'seed.sql'
+      - 'docker-compose.yml'
+      - '.github/workflows/build.yml'
   pull_request:
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig.json'
+      - 'tsconfig.node.json'
+      - 'postcss.config.js'
+      - 'tailwind.config.js'
+      - 'seed.sql'
+      - 'docker-compose.yml'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 jobs:
