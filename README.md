@@ -9,7 +9,8 @@ Modern Web3-like dark UI, no overflows, responsive flex layout with internal scr
 
 ## Base functionality (v0.1)
 
-- Connection profiles (host, port, user, password, database, sslmode), saved to localStorage, test-connection
+- Connection profiles (host, port, user, **optional database**, sslmode), saved to localStorage, test-connection
+- Database picker: leave the database empty to connect via the `postgres` maintenance DB, then switch between all databases from the sidebar — no reconnect dialog needed
 - Schema / table / view explorer with search + refresh
 - Table data grid: pagination (25–250/page), server-side LIMIT/OFFSET, click-to-sort, total count, execution time
 - Table structure: columns, types, nullable, defaults, PK badges

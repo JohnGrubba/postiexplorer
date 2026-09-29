@@ -81,8 +81,13 @@ export default function ConnectionDialog({ initial, onSave, onClose, onTest }: P
           </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-xs text-slate-400">
-              Database
-              <input className={`${input} mt-1 font-mono`} value={form.database} onChange={(e) => set("database", e.target.value)} />
+              Database <span className="text-slate-600">(optional — pick after connecting)</span>
+              <input
+                className={`${input} mt-1 font-mono`}
+                placeholder="postgres"
+                value={form.database}
+                onChange={(e) => set("database", e.target.value)}
+              />
             </label>
             <label className="block text-xs text-slate-400">
               SSL mode

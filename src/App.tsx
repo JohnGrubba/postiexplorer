@@ -8,17 +8,21 @@ import QueryView from "./components/QueryView";
 import InfoView from "./components/InfoView";
 import ConnectionDialog from "./components/ConnectionDialog";
 import StatusBar from "./components/StatusBar";
-import { connect, disconnect, listSchemas, listTables, testConnection } from "./lib/api";
+import { connect, disconnect, getConnectionId, listDatabases, listSchemas, listTables, testConnection } from "./lib/api";
 import { loadProfiles, saveProfiles, newProfile } from "./lib/profiles";
-import type { ConnectionProfile, MainTab, SchemaEntry, TableEntry } from "./types";
+import type { ConnectionProfile, DatabaseEntry, MainTab, SchemaEntry, TableEntry } from "./types";
 
 export default function App() {
   const [profiles, setProfiles] = useState<ConnectionProfile[]>(() => loadProfiles());
   const [activeId, setActiveId] = useState<string | null>(() => loadProfiles()[0]?.id ?? null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [switchingDb, setSwitchingDb] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
+
+  const [databases, setDatabases] = useState<DatabaseEntry[]>([]);
+  const [currentDb, setCurrentDb] = useState<string | null>(null);
 
   const [schemas, setSchemas] = useState<SchemaEntry[]>([]);
   const [tablesBySchema, setTablesBySchema] = useState<Record<string, TableEntry[]>>({});
@@ -85,6 +89,11 @@ export default function App() {
       await connect(active);
       setLatency(Math.round(performance.now() - t0));
       setConnected(true);
+      const dbs = await listDatabases().catch(() => []);
+      setDatabases(dbs);
+      setCurrentDb(active.database.trim() !== "" ? active.database : "postgres");
+      setSchema(null);
+      setTable(null);
       await refreshTree();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -94,9 +103,32 @@ export default function App() {
     }
   }
 
+  async function handleSwitchDatabase(db: string) {
+    if (!active || db === currentDb) return;
+    setSwitchingDb(true);
+    setError(null);
+    try {
+      const oldId = getConnectionId();
+      await connect({ ...active, database: db });
+      if (oldId) await disconnect(oldId).catch(() => {});
+      setCurrentDb(db);
+      setSchema(null);
+      setTable(null);
+      setSchemas([]);
+      setTablesBySchema({});
+      await refreshTree();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSwitchingDb(false);
+    }
+  }
+
   async function handleDisconnect() {
     await disconnect();
     setConnected(false);
+    setDatabases([]);
+    setCurrentDb(null);
     setSchemas([]);
     setTablesBySchema({});
     setSchema(null);
@@ -123,6 +155,7 @@ export default function App() {
           profiles={profiles}
           activeId={activeId}
           connected={connected}
+          currentDb={currentDb}
           busy={busy}
           onSelect={setActiveId}
           onConnect={handleConnect}
@@ -139,6 +172,9 @@ export default function App() {
               profiles={profiles}
               active={active}
               connected={connected}
+              databases={databases}
+              currentDb={currentDb}
+              switchingDb={switchingDb}
               schemas={schemas}
               tablesBySchema={tablesBySchema}
               selectedSchema={schema}
@@ -156,6 +192,7 @@ export default function App() {
                 setTable(t);
                 setTab("data");
               }}
+              onSwitchDatabase={handleSwitchDatabase}
               onRefresh={refreshTree}
             />
           </div>
@@ -186,12 +223,12 @@ export default function App() {
               {tab === "data" && <TableDataView schema={schema} table={table} />}
               {tab === "structure" && <StructureView schema={schema} table={table} />}
               {tab === "query" && <QueryView />}
-              {tab === "info" && <InfoView connected={connected} />}
+              {tab === "info" && <InfoView key={currentDb ?? "none"} connected={connected} />}
             </div>
           </main>
         </div>
 
-        <StatusBar connected={connected} schema={schema} table={table} latency={latency} />
+        <StatusBar connected={connected} database={currentDb} schema={schema} table={table} latency={latency} />
       </div>
 
       {dialog && (

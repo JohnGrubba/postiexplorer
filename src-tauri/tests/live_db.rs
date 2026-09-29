@@ -40,6 +40,26 @@ async fn test_connection_bad_password_fails() {
 }
 
 #[tokio::test]
+async fn connect_without_database_lands_on_postgres() {
+    // Empty database = picker flow: connect to maintenance DB, list, switch.
+    let mut p = profile();
+    p.database = String::new();
+    let state = DbState::default();
+    let id = db::open_connection(&state, p).await.expect("connect without db");
+    let dbs = db::op_list_databases(&state, &id).await.expect("databases");
+    assert!(dbs.iter().any(|d| d.name == "demo_db"), "dbs: {dbs:?}");
+    db::close_connection(&state, &id);
+
+    // Switch: open a second connection to the picked database.
+    let mut p2 = profile();
+    p2.database = "demo_db".into();
+    let id2 = db::open_connection(&state, p2).await.expect("switch to demo_db");
+    let tables = db::op_list_tables(&state, &id2, "public").await.expect("tables");
+    assert!(tables.iter().any(|t| t.name == "users"));
+    db::close_connection(&state, &id2);
+}
+
+#[tokio::test]
 async fn test_connection_bad_database_fails() {
     let mut p = profile();
     p.database = "no_such_db_xyz".into();

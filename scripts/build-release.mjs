@@ -50,15 +50,13 @@ function collect(dir, destSub) {
 }
 
 // 1. Full Tauri release build (runs `npm run build` for the frontend first).
-import { existsSync as _exists } from "node:fs";
-const tauriBin = join(
-  ROOT,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "tauri.cmd" : "tauri",
-);
-const fallback = process.platform === "win32" ? "npx.cmd" : "npx";
-run(_exists(tauriBin) ? tauriBin : fallback, _exists(tauriBin) ? ["build", ...extraArgs] : ["tauri", "build", ...extraArgs]);
+// The CLI entry is a Node script — run it with the current node binary.
+// No shell needed on any OS (and .cmd files can't run shell-less on Windows).
+run(process.execPath, [
+  join(ROOT, "node_modules", "@tauri-apps", "cli", "tauri.js"),
+  "build",
+  ...extraArgs,
+]);
 
 // 2. Copy bundles to ./releases/.
 mkdirSync(OUT, { recursive: true });

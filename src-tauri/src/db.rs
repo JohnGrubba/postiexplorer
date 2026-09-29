@@ -31,13 +31,16 @@ impl Default for DbState {
 }
 
 fn conn_string(p: &ConnectionProfile) -> String {
+    // Empty database = "choose after connecting" → land on the `postgres`
+    // maintenance DB; the frontend then offers the database picker.
+    let db = if p.database.trim().is_empty() { "postgres" } else { &p.database };
     format!(
         "host={} port={} user={} password={} dbname={} connect_timeout=8",
         p.host,
         p.port,
         escape(&p.user),
         escape(&p.password),
-        escape(&p.database),
+        escape(db),
     )
 }
 

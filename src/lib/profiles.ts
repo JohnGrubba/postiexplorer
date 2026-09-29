@@ -24,7 +24,7 @@ export function newProfile(): ConnectionProfile {
     port: 5432,
     user: "postgres",
     password: "",
-    database: "postgres",
+    database: "",
     sslmode: "prefer",
   };
 }

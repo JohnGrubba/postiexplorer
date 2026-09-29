@@ -12,6 +12,12 @@ import type {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+let currentDb = "demo_db";
+
+export function setDatabase(db: string) {
+  currentDb = db;
+}
+
 export const MOCK_PROFILE: ConnectionProfile = {
   id: "demo",
   name: "Local Demo",
@@ -159,7 +165,7 @@ export const mock = {
     return {
       version: "PostgreSQL 16.4 on x86_64 (mock)",
       uptime: "3 days 04:12",
-      database: "demo_db",
+      database: currentDb,
       size_pretty: "42 MB",
       table_count: 6,
       connection_count: 7,

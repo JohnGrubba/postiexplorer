@@ -1,10 +1,12 @@
 export default function StatusBar({
   connected,
+  database,
   schema,
   table,
   latency,
 }: {
   connected: boolean;
+  database: string | null;
   schema: string | null;
   table: string | null;
   latency: number | null;
@@ -15,8 +17,9 @@ export default function StatusBar({
         <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-400" : "bg-slate-600"}`} />
         {connected ? "live" : "offline"}
       </span>
-      <span className="hidden truncate sm:block">
-        {schema && table ? `${schema}.${table}` : "no selection"}
+      <span className="hidden truncate font-mono sm:block">
+        {database ?? "no database"}
+        {schema && table ? ` · ${schema}.${table}` : ""}
       </span>
       <span className="flex-1" />
       {latency !== null && <span className="font-mono">{latency} ms</span>}

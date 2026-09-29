@@ -9,7 +9,7 @@ import type {
   TableEntry,
   TestConnectionResult,
 } from "../types";
-import { mock } from "./mock";
+import { mock, setDatabase as setMockDatabase } from "./mock";
 
 function isTauri(): boolean {
   if (typeof window === "undefined") return false;
@@ -32,27 +32,38 @@ export function getConnectionId() {
   return connectionId;
 }
 
+/** Empty `database` means "decide after connecting" — use the `postgres`
+ *  maintenance DB for the initial connection. Applies to both Tauri and mock. */
+function effectiveProfile(profile: ConnectionProfile): ConnectionProfile {
+  if (profile.database.trim() !== "") return profile;
+  return { ...profile, database: "postgres" };
+}
+
 export async function testConnection(profile: ConnectionProfile): Promise<TestConnectionResult> {
-  if (!isTauri()) return mock.testConnection(profile);
-  return invoke<TestConnectionResult>("test_connection", { profile });
+  const eff = effectiveProfile(profile);
+  if (!isTauri()) return mock.testConnection(eff);
+  return invoke<TestConnectionResult>("test_connection", { profile: eff });
 }
 
 export async function connect(profile: ConnectionProfile): Promise<string> {
+  const eff = effectiveProfile(profile);
   if (!isTauri()) {
+    setMockDatabase(eff.database);
     connectionId = "mock-connection";
     return connectionId;
   }
-  connectionId = await invoke<string>("connect", { profile });
+  connectionId = await invoke<string>("connect", { profile: eff });
   return connectionId;
 }
 
-export async function disconnect(): Promise<void> {
+export async function disconnect(id?: string): Promise<void> {
+  const target = id ?? connectionId;
   if (!isTauri()) {
-    connectionId = null;
+    if (target === connectionId) connectionId = null;
     return;
   }
-  if (connectionId) await invoke("disconnect", { connectionId });
-  connectionId = null;
+  if (target) await invoke("disconnect", { connectionId: target });
+  if (target === connectionId) connectionId = null;
 }
 
 export async function listDatabases(): Promise<DatabaseEntry[]> {

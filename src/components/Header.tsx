@@ -6,13 +6,14 @@ interface Props {
   profiles: ConnectionProfile[];
   activeId: string | null;
   connected: boolean;
+  currentDb: string | null;
   busy: boolean;
   onSelect: (id: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
 }
 
-export default function Header({ profiles, activeId, connected, busy, onSelect, onConnect, onDisconnect }: Props) {
+export default function Header({ profiles, activeId, connected, currentDb, busy, onSelect, onConnect, onDisconnect }: Props) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-edge bg-panel/80 px-4 backdrop-blur">
       <div className="flex items-center gap-2.5">
@@ -39,7 +40,7 @@ export default function Header({ profiles, activeId, connected, busy, onSelect, 
         {profiles.length === 0 && <option value="">No profiles yet</option>}
         {profiles.map((p) => (
           <option key={p.id} value={p.id}>
-            {p.name} · {p.user}@{p.host}:{p.port}/{p.database}
+            {p.name} · {p.user}@{p.host}:{p.port}/{p.database || "…"}
           </option>
         ))}
       </select>
@@ -52,7 +53,7 @@ export default function Header({ profiles, activeId, connected, busy, onSelect, 
         }`}
       >
         <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-400" : "bg-slate-500"}`} />
-        {connected ? "connected" : "disconnected"}
+        {connected ? (currentDb ?? "connected") : "disconnected"}
       </div>
 
       {connected ? (

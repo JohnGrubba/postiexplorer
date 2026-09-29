@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Database,
+  DatabaseZap,
   FolderGit2,
   LayoutGrid,
   Plus,
@@ -12,12 +13,15 @@ import {
   Table2,
   Trash2,
 } from "lucide-react";
-import type { ConnectionProfile, SchemaEntry, TableEntry } from "../types";
+import type { ConnectionProfile, DatabaseEntry, SchemaEntry, TableEntry } from "../types";
 
 interface Props {
   profiles: ConnectionProfile[];
   active: ConnectionProfile | null;
   connected: boolean;
+  databases: DatabaseEntry[];
+  currentDb: string | null;
+  switchingDb: boolean;
   schemas: SchemaEntry[];
   tablesBySchema: Record<string, TableEntry[]>;
   selectedSchema: string | null;
@@ -28,6 +32,7 @@ interface Props {
   onEdit: (p: ConnectionProfile) => void;
   onOpenSettings: (p: ConnectionProfile) => void;
   onSelectTable: (schema: string, table: string) => void;
+  onSwitchDatabase: (db: string) => void;
   onRefresh: () => void;
 }
 
@@ -99,6 +104,25 @@ export default function Sidebar(props: Props) {
       ) : (
         <>
           <div className="shrink-0 space-y-2 border-b border-edge p-2.5">
+            {props.connected && props.databases.length > 0 && (
+              <label className="block">
+                <span className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  <DatabaseZap size={12} className="text-neon" /> Database
+                </span>
+                <select
+                  value={props.currentDb ?? ""}
+                  disabled={props.switchingDb}
+                  onChange={(e) => props.onSwitchDatabase(e.target.value)}
+                  className="h-8 w-full truncate rounded-lg border border-neon/30 bg-void px-2 text-[13px] font-medium text-white outline-none focus:border-neon/60 disabled:opacity-60"
+                >
+                  {props.databases.map((d) => (
+                    <option key={d.name} value={d.name}>
+                      {d.name} · {d.size_pretty}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
               <input
