@@ -6,3 +6,5 @@ src-tauri/WixTools/
 *.log
 .DS_Store
 Thumbs.db
+.env
+.env.*

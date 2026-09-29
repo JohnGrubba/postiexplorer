@@ -1,0 +1,11 @@
+# Normalize line endings across Windows / Linux / macOS checkouts.
+* text=auto eol=lf
+
+# Keep Windows installers / binaries out of text normalization if ever added.
+*.exe binary
+*.msi binary
+*.AppImage binary
+*.dmg binary
+*.icns binary
+*.ico binary
+*.png binary

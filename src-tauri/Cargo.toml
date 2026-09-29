@@ -2,6 +2,10 @@
 name = "postiexplorer"
 version = "0.1.0"
 description = "Modern PostgreSQL explorer — single-binary desktop app"
+authors = ["Jonas Grubbauer"]
+license = "MIT"
+repository = "https://github.com/JohnGrubba/postiexplorer"
+homepage = "https://github.com/JohnGrubba/postiexplorer"
 edition = "2021"
 rust-version = "1.77"
 

@@ -1,0 +1,50 @@
+name: Bug report
+description: Something broken against a real PostgreSQL
+title: "fix: "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: e.g. PostiExplorer_0.1.0_x64-setup.exe
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: Windows / Linux / macOS + version
+    validations:
+      required: true
+  - type: input
+    id: pg
+    attributes:
+      label: PostgreSQL version
+      description: Output of SELECT version(), e.g. 16.4
+    validations:
+      required: true
+  - type: input
+    id: mode
+    attributes:
+      label: Header subtitle
+      description: "desktop · live backend" or "web preview · mock data" (browser preview always uses mock data)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Exact error text included. Never paste real credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior

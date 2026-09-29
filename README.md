@@ -1,22 +1,43 @@
-# PostiExplorer — Modern PostgreSQL Explorer
+<div align="center">
+  <img src="src-tauri/icons/icon.png" width="96" alt="PostiExplorer logo" />
+  <h1>PostiExplorer</h1>
+  <p>Modern single-binary PostgreSQL explorer — Tauri v2 (Rust) + React + TypeScript + Tailwind.</p>
+  <p>
+    <a href="https://github.com/JohnGrubba/postiexplorer/actions/workflows/build.yml"><img src="https://github.com/JohnGrubba/postiexplorer/actions/workflows/build.yml/badge.svg" alt="build" /></a>
+    <a href="https://github.com/JohnGrubba/postiexplorer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/JohnGrubba/postiexplorer" alt="license: MIT" /></a>
+    <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-8b5cf6" alt="platforms" />
+    <img src="https://img.shields.io/badge/postgres-16+-22d3ee" alt="postgres 16+" />
+  </p>
+</div>
 
-Single-binary desktop app for PostgreSQL. Tauri v2 (Rust) + React + TypeScript + Tailwind.
+## Download
 
-Modern Web3-like dark UI, no overflows, responsive flex layout with internal scroll areas.
+Grab the latest installer from
+[**GitHub Releases**](https://github.com/JohnGrubba/postiexplorer/releases):
 
-![connected](screenshots/app-02-connected.png)
-![query](screenshots/app-03-query.png)
+| OS      | File                                             |
+| ------- | ------------------------------------------------ |
+| Windows | `PostiExplorer_*_x64-setup.exe` (installer) or `postiexplorer.exe` (portable) |
+| Linux   | `*.AppImage` (`chmod +x` to run), `.deb` / `.rpm` |
+| macOS   | `*.dmg`                                          |
 
-## Base functionality (v0.1)
+Releases are built automatically by [CI](.github/workflows/build.yml) on every
+`v*` tag. Or build locally — see [BUILD.md](BUILD.md).
 
-- Connection profiles (host, port, user, **optional database**, sslmode), saved to localStorage, test-connection
-- Database picker: leave the database empty to connect via the `postgres` maintenance DB, then switch between all databases from the sidebar — no reconnect dialog needed
+## Features (v0.1)
+
+![connected database grid](screenshots/app-02-connected.png)
+![database picker](screenshots/app-09-db-picker.png)
+![SQL editor](screenshots/app-03-query.png)
+
+- Connection profiles (host, port, user, **optional database**, sslmode) with test-connection
+- Database picker: leave the database empty to connect via the `postgres` maintenance DB, then switch between all databases from the sidebar
 - Schema / table / view explorer with search + refresh
 - Table data grid: pagination (25–250/page), server-side LIMIT/OFFSET, click-to-sort, total count, execution time
 - Table structure: columns, types, nullable, defaults, PK badges
 - SQL editor: run with Ctrl+Enter, results grid, history (20), CSV export, timing + row count
 - Server info cards: version, size, tables, connections, uptime
-- Status bar: live/offline, selection, latency
+- Detailed connection errors with SQLSTATE codes (no more bare `db error`)
 
 All PostgreSQL access goes through `src-tauri/src/db.rs`. Every Tauri command in
 `src-tauri/src/main.rs` is a thin wrapper — new features only need a new function
@@ -26,7 +47,7 @@ Stubbed for next milestones (UI placeholders + backend extension points already 
 functions, triggers, extensions, roles, EXPLAIN ANALYZE, multi-statement batches,
 ER diagram, import/export, TLS (`sslmode=require` — see `TLS TODO` in `db.rs`).
 
-## Quick start
+## Quick start (development)
 
 ```bash
 npm install
@@ -34,27 +55,14 @@ npm run dev        # web preview with mock data (no database needed)
 ```
 
 Open http://127.0.0.1:1420 — click **Connect** to browse mock data.
+The header shows `web preview · mock data` in this mode.
 
-For a live database, run inside the Tauri window (or `npm run tauri dev`):
-
-```bash
-npm run tauri dev
-```
-
-## Build standalone executables
-
-See [BUILD.md](BUILD.md) — one command per OS:
+For a live database, run the desktop window:
 
 ```bash
-npm run tauri build        # current OS (bundles in src-tauri/target/...)
-npm run dist               # build + collect finished installers into ./releases/
+docker compose up -d   # local postgres:16, seeds demo_db from seed.sql
+npm run tauri dev      # header shows "desktop · live backend"
 ```
-
-`./releases/` (gitignored) collects everything per OS — see `scripts/build-release.mjs`.
-`./dist/` is **not** used for installers: it is Vite's frontend output and
-Tauri's `frontendDist`. Overwriting it would break the build.
-
-Outputs: Windows `.exe` + NSIS installer, Linux `.AppImage`/`.deb`, macOS `.dmg`/`.app`.
 
 ## Project layout
 
@@ -63,37 +71,48 @@ src/                  React frontend
   components/         Header, Sidebar, DataGrid, TableDataView, StructureView,
                       QueryView, InfoView, ConnectionDialog, StatusBar
   lib/api.ts          Tauri invoke wrapper + browser mock fallback
-  lib/mock.ts         Demo dataset (used when __TAURI__ is absent)
+  lib/mock.ts         Demo dataset (used when Tauri IPC is absent)
   lib/profiles.ts     localStorage persistence
   types.ts            Shared TS types (mirror of Rust models.rs)
 src-tauri/
+  src/lib.rs          Library root (re-exports db + models for tests)
   src/main.rs         Tauri commands (thin wrappers)
   src/db.rs           All SQL + connection pool (Arc<Mutex<Client>>)
   src/models.rs       Serde structs
+  tests/live_db.rs    Integration tests vs real PostgreSQL
   tauri.conf.json     Window + bundle config
   capabilities/       Permissions
+scripts/              build-release.mjs (collects bundles into ./releases/)
 screenshots/          Verified UI states
 ```
 
 ## Testing
 
-- `npx tsc --noEmit` — typecheck ✅
-- `npm run build` — production frontend build ✅
-- `cargo test --test live_db` in `src-tauri` — Rust backend vs **real PostgreSQL 16** ✅
-- Playwright screenshots + overflow check (`scrollWidth == clientWidth`) ✅
-- Live-DB test: point a profile at your Postgres and use Test / Connect.
-
-### Local Postgres (Docker)
-
 ```bash
-docker compose up -d   # postgres:16 on localhost:5432, seeds demo_db from seed.sql
-npm run test:db        # runs the live-DB integration tests
+npx tsc --noEmit
+npm run build
+cargo test --test live_db --manifest-path src-tauri/Cargo.toml   # needs docker compose up -d
 ```
 
-`src-tauri/tests/live_db.rs` covers connect, wrong-password / wrong-database
-errors, databases → schemas → tables → columns → paged/sorted rows → raw SQL →
-server info. CI runs the same suite on every push (Linux job, see below).
+`src-tauri/tests/live_db.rs` covers connect, empty-database picker flow,
+wrong-password / wrong-database errors, databases → schemas → tables →
+columns → paged/sorted rows → raw SQL → server info. CI runs the same suite
+on every push (Linux job).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and small, well-scoped PRs
+welcome — please include the header subtitle, exact error text, and (for UI)
+a screenshot. By participating you agree to the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for supported versions and how to report
+vulnerabilities privately.
 
 ## License
 
-MIT — do what you want, no warranty.
+[MIT](LICENSE) © 2026 Jonas Grubbauer. Built with
+[Tauri](https://tauri.app), [tokio-postgres](https://github.com/sfackler/rust-postgres),
+React and Tailwind CSS.
