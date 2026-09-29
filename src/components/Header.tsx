@@ -1,6 +1,7 @@
-import { Boxes, PlugZap, Unplug } from "lucide-react";
+import { PlugZap, Unplug } from "lucide-react";
 import type { ConnectionProfile } from "../types";
 import { isTauri } from "../lib/api";
+import logoUrl from "../assets/logo.svg";
 
 interface Props {
   profiles: ConnectionProfile[];
@@ -17,9 +18,7 @@ export default function Header({ profiles, activeId, connected, currentDb, busy,
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-edge bg-panel/80 px-4 backdrop-blur">
       <div className="flex items-center gap-2.5">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-neon to-violet2 shadow-glow">
-          <Boxes size={20} className="text-void" strokeWidth={2.5} />
-        </div>
+        <img src={logoUrl} alt="PostiExplorer logo" className="h-9 w-9 rounded-xl shadow-glow" />
         <div className="leading-tight">
           <div className="text-[15px] font-700 font-bold tracking-tight text-white">
             Posti<span className="bg-gradient-to-r from-neon to-violet2 bg-clip-text text-transparent">Explorer</span>

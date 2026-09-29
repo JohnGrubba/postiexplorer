@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="v1-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="v1-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111a2e"/>
+      <stop offset="1" stop-color="#070b14"/>
+    </linearGradient>
+    <radialGradient id="v1-glow" cx="0.5" cy="0.35" r="0.8">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#v1-bg)" stroke="#22d3ee" stroke-opacity="0.35" stroke-width="2"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#v1-glow)"/>
+  <!-- database stack -->
+  <g fill="none" stroke-linecap="round">
+    <path d="M60 90 v52 c0 12 23 22 52 22 s52 -10 52 -22 V90" stroke="url(#v1-grad)" stroke-width="15"/>
+    <ellipse cx="112" cy="90" rx="52" ry="21" stroke="url(#v1-grad)" stroke-width="15"/>
+    <path d="M60 118 c0 12 23 22 52 22 s52 -10 52 -22" stroke="#ffffff" stroke-opacity="0.28" stroke-width="6"/>
+  </g>
+  <ellipse cx="112" cy="90" rx="27" ry="9" fill="#ffffff" opacity="0.30"/>
+  <!-- explorer magnifier -->
+  <g>
+    <circle cx="172" cy="172" r="37" fill="#070b14" stroke="url(#v1-grad)" stroke-width="11"/>
+    <line x1="198" y1="198" x2="222" y2="222" stroke="url(#v1-grad)" stroke-width="15" stroke-linecap="round"/>
+    <circle cx="172" cy="172" r="9" fill="url(#v1-grad)"/>
+  </g>
+</svg>
