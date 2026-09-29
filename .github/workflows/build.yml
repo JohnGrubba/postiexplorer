@@ -52,6 +52,12 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
 
+      # The Tauri binary embeds ../dist at COMPILE time (generate_context!),
+      # and `cargo test` also compiles the binary — so the frontend must be
+      # built before any cargo command. Otherwise you get:
+      #   "frontendDist ... but this path doesn't exist".
+      - run: npm run build
+
       - name: Backend tests (live Postgres)
         run: cargo test --test live_db --manifest-path src-tauri/Cargo.toml
         env:
@@ -60,7 +66,8 @@ jobs:
           PG_PASSWORD: postgres
           PG_DB: demo_db
 
-      - run: npm run dist
+      # appimage + deb only: rpm bundling needs rpmbuild, absent on ubuntu runners.
+      - run: npm run dist -- --bundles appimage deb
 
       - uses: actions/upload-artifact@v4
         with:

@@ -31,6 +31,12 @@ cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo test --test live_db --manifest-path src-tauri/Cargo.toml
 ```
 
+> Order matters: `cargo test`/`cargo check` compile the Tauri binary, which
+> embeds `../dist` at compile time (`generate_context!`). Always run
+> `npm run build` first, or you get
+> `frontendDist ... but this path doesn't exist`. `npm run test:db` does
+> this for you.
+
 ## Architecture (where things go)
 
 - All SQL lives in `src-tauri/src/db.rs`. Tauri commands in

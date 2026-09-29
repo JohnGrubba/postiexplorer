@@ -24,7 +24,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dist": "node scripts/build-release.mjs",
-    "test:db": "docker compose up -d && cargo test --test live_db --manifest-path src-tauri/Cargo.toml"
+    "test:db": "docker compose up -d && npm run build && cargo test --test live_db --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

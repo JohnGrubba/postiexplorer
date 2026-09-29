@@ -101,6 +101,11 @@ strategy: # (see file for full definition)
   (`vite.config.ts` sets `strictPort: true`).
 - `__TAURI__ undefined` in browser → expected; the app falls back to mock data.
   Real Postgres only works inside the Tauri window.
+- `frontendDist "..." but this path doesn't exist` → the frontend was never
+  built. Run `npm run build` first — `cargo test`/`cargo check` also compile
+  the Tauri binary, which embeds `dist/` at compile time.
+- Linux `rpm` bundle fails (`rpmbuild` missing) → build
+  `--bundles appimage deb` (the CI default) instead of `all`.
 
 ## 7. Current verification (v0.1, 2026-09-29)
 
