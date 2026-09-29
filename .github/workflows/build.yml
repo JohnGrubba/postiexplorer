@@ -1,5 +1,6 @@
 # Builds PostiExplorer on Windows, Linux and macOS and publishes the
-# bundles from ./releases/ as CI artifacts (and as a GitHub Release on tags).
+# bundles from ./releases/ as CI artifacts (and as a rolling GitHub
+# Release tagged `latest` on every push to main — no manual tags needed).
 #
 # Live-DB verification: the ubuntu job starts postgres:16 as a service,
 # seeds demo_db with seed.sql and runs the Rust integration tests
@@ -10,7 +11,6 @@ name: build
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -112,9 +112,9 @@ jobs:
           name: postiexplorer-macos
           path: releases/
 
-  # ── Publish installers as a GitHub Release on version tags ──
+  # ── Publish installers as a rolling GitHub Release on every push to main ──
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
@@ -125,4 +125,14 @@ jobs:
           path: artifacts
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: PostiExplorer latest (main)
+          body: |
+            Auto-built from `main` — no manual tags needed.
+
+            Commit: ${{ github.sha }}
+            Run: #${{ github.run_number }}
           files: artifacts/**/*
+          make_latest: true
+          generate_release_notes: true
+          prerelease: false

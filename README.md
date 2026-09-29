@@ -22,7 +22,7 @@ Grab the latest installer from
 | macOS   | `*.dmg`                                          |
 
 Releases are built automatically by [CI](.github/workflows/build.yml) on every
-`v*` tag. Or build locally — see [BUILD.md](BUILD.md).
+push to `main` (rolling `latest` release — no tags needed). Or build locally — see [BUILD.md](BUILD.md).
 
 ## Features (v0.1)
 

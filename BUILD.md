@@ -81,8 +81,9 @@ Bundle metadata (name, identifier, icons, category) lives in
 `.github/workflows/build.yml` builds Windows (x64), Linux (x64) and macOS
 (arm64) on every push/PR. The Linux job additionally seeds a real
 `postgres:16` service with `seed.sql` and runs `cargo test --test live_db`
-before building. Pushing a tag `v*` publishes everything in `releases/` as a
-GitHub Release (artifacts are also kept per run).
+before building. Every push to `main` updates the rolling `latest`
+GitHub Release with everything in `releases/` (artifacts are also kept per run).
+No manual tags needed.
 
 ```yaml
 # sketch of the matrix
