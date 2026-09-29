@@ -71,6 +71,41 @@ async fn execute_sql(state: tauri::State<'_, DbState>, connection_id: String, sq
 }
 
 #[tauri::command]
+async fn insert_row(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    values: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<u64, String> {
+    db::op_insert_row(&state, &connection_id, &schema, &table, values).await
+}
+
+#[tauri::command]
+async fn update_row(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    ctid: String,
+    patch: std::collections::HashMap<String, serde_json::Value>,
+    defaults: Vec<String>,
+) -> Result<u64, String> {
+    db::op_update_row(&state, &connection_id, &schema, &table, ctid, patch, defaults).await
+}
+
+#[tauri::command]
+async fn delete_rows(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    ctids: Vec<String>,
+) -> Result<u64, String> {
+    db::op_delete_rows(&state, &connection_id, &schema, &table, ctids).await
+}
+
+#[tauri::command]
 async fn get_server_info(state: tauri::State<'_, DbState>, connection_id: String) -> Result<ServerInfo, String> {
     db::op_server_info(&state, &connection_id).await
 }
@@ -89,6 +124,9 @@ fn main() {
             get_columns,
             get_table_data,
             execute_sql,
+            insert_row,
+            update_row,
+            delete_rows,
             get_server_info
         ])
         .run(tauri::generate_context!())

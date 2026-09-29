@@ -63,6 +63,9 @@ pub struct TableDataResult {
     pub limit: i64,
     pub offset: i64,
     pub execution_ms: u64,
+    pub ctids: Vec<String>,
+    pub editable: bool,
+    pub primary_keys: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

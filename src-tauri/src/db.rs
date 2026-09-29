@@ -74,8 +74,11 @@ fn connect_context(p: &ConnectionProfile) -> String {
 }
 
 /// Only allow safe SQL identifiers (schema / table / column names).
+/// Identifiers are always double-quoted with `"` escaped, so any non-empty
+/// name without a NUL byte is safe — this must stay permissive so tables
+/// with mixed-case, spaces or other legal characters remain editable.
 fn ident_ok(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 63 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !s.is_empty() && !s.contains('\0')
 }
 
 fn quote_ident(s: &str) -> Result<String, String> {
@@ -83,6 +86,45 @@ fn quote_ident(s: &str) -> Result<String, String> {
         return Err(format!("unsafe identifier: {s}"));
     }
     Ok(format!("\"{}\"", s.replace('"', "\"\"")))
+}
+
+/// Quote a string as a SQL literal (`'` escaped by doubling).
+fn quote_literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Render a frontend JSON value as a SQL literal for INSERT/UPDATE.
+/// Strings are quoted (PostgreSQL casts `'123'` to int, `'true'` to bool,
+/// `'...'` to date/json/bytea automatically); NULL stays NULL.
+fn json_to_literal(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match v {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => quote_literal(s),
+        Value::Array(_) | Value::Object(_) => quote_literal(&v.to_string()),
+    }
+}
+
+/// ctid text looks like `(0,1)` — validate strictly before interpolating.
+fn validate_ctid(s: &str) -> Result<(), String> {
+    let inner = s.strip_prefix('(').and_then(|r| r.strip_suffix(')'));
+    match inner {
+        Some(pair) => {
+            let mut parts = pair.split(',');
+            let ok = match (parts.next(), parts.next(), parts.next()) {
+                (Some(a), Some(b), None) => !a.is_empty() && !b.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit()),
+                _ => false,
+            };
+            if ok {
+                Ok(())
+            } else {
+                Err(format!("invalid row id: {s}"))
+            }
+        }
+        None => Err(format!("invalid row id: {s}")),
+    }
 }
 
 async fn connect_client(p: &ConnectionProfile) -> Result<Client, String> {
@@ -336,6 +378,47 @@ pub async fn op_get_columns(
         .collect())
 }
 
+async fn fetch_relkind(client: &Client, schema: &str, table: &str) -> Result<String, String> {
+    let row = client
+        .query_opt(
+            "SELECT c.relkind::text FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relname = $2",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    row.map(|r| r.get(0)).ok_or_else(|| format!("table \"{schema}\".\"{table}\" not found"))
+}
+
+async fn fetch_primary_keys(client: &Client, schema: &str, table: &str) -> Result<Vec<String>, String> {
+    let rows = client
+        .query(
+            "SELECT a.attname FROM pg_index i
+             JOIN pg_class t ON t.oid = i.indrelid
+             JOIN pg_namespace n ON n.oid = t.relnamespace
+             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+             WHERE n.nspname = $1 AND t.relname = $2 AND i.indisprimary
+             ORDER BY a.attnum",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    Ok(rows.into_iter().map(|r| r.get(0)).collect())
+}
+
+async fn fetch_column_defs(client: &Client, schema: &str, table: &str) -> Result<(Vec<String>, Vec<String>), String> {
+    let rows = client
+        .query(
+            "SELECT column_name, data_type FROM information_schema.columns
+             WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    Ok((rows.iter().map(|r| r.get(0)).collect(), rows.iter().map(|r| r.get(1)).collect()))
+}
+
 pub async fn op_get_table_data(
     state: &DbState,
     connection_id: &str,
@@ -353,24 +436,102 @@ pub async fn op_get_table_data(
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
 
+    let relkind = fetch_relkind(&client, schema, table).await?;
+    // Only heap relations carry a stable ctid we can target for UPDATE/DELETE.
+    let mut editable = matches!(relkind.as_str(), "r" | "p" | "f");
+    let primary_keys = fetch_primary_keys(&client, schema, table).await.unwrap_or_default();
+
     let total: i64 = client
         .query_one(&format!("SELECT COUNT(*) FROM {qs}.{qt}"), &[])
         .await
         .map_err(pg_err)?
         .get(0);
 
-    let mut sql = format!("SELECT * FROM {qs}.{qt}");
+    let mut order_sql = String::new();
     if let Some(col) = order_by.filter(|c| !c.is_empty()) {
         let qc = quote_ident(&col)?;
         let dir = if order_dir.as_deref() == Some("DESC") { "DESC" } else { "ASC" };
-        sql.push_str(&format!(" ORDER BY {qc} {dir}"));
+        order_sql.push_str(&format!(" ORDER BY {qc} {dir}"));
     }
-    sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+
+    let base = format!("SELECT * FROM {qs}.{qt}{order_sql} LIMIT {limit} OFFSET {offset}");
+
+    // Fetch ctid alongside the page so every row can be addressed for
+    // UPDATE/DELETE even when the table has no primary key.
+    if editable {
+        let sql_ctid = format!("SELECT *, ctid::text AS \"__postiexplorer_ctid\" FROM {qs}.{qt}{order_sql} LIMIT {limit} OFFSET {offset}");
+        let t0 = Instant::now();
+        match client.query(&sql_ctid, &[]).await {
+            Ok(rows) => {
+                let ms = t0.elapsed().as_millis() as u64;
+                if rows.is_empty() {
+                    let (columns, column_types) = fetch_column_defs(&client, schema, table).await?;
+                    return Ok(TableDataResult {
+                        columns,
+                        column_types,
+                        rows: vec![],
+                        total,
+                        limit,
+                        offset,
+                        execution_ms: ms,
+                        ctids: vec![],
+                        editable,
+                        primary_keys,
+                    });
+                }
+                let ncols = rows[0].len();
+                let ctid_idx = ncols - 1;
+                let columns: Vec<String> = rows[0].columns().iter().take(ctid_idx).map(|c| c.name().to_string()).collect();
+                let column_types: Vec<String> = rows[0].columns().iter().take(ctid_idx).map(|c| c.type_().name().to_string()).collect();
+                let mut data = Vec::with_capacity(rows.len());
+                let mut ctids = Vec::with_capacity(rows.len());
+                for r in &rows {
+                    data.push((0..ctid_idx).map(|i| cell_to_json(r, i)).collect());
+                    let ctid: String = r.try_get(ctid_idx).map_err(pg_err)?;
+                    ctids.push(ctid);
+                }
+                // Re-time cheaply: measure a no-op? Use actual query time instead.
+                return Ok(TableDataResult {
+                    columns,
+                    column_types,
+                    rows: data,
+                    total,
+                    limit,
+                    offset,
+                    execution_ms: ms,
+                    ctids,
+                    editable,
+                    primary_keys,
+                });
+            }
+            Err(_) => {
+                // No addressable ctid (e.g. partitioned parent, foreign
+                // table without ctid): fall through to a plain read-only page.
+                editable = false;
+            }
+        }
+    }
 
     let t0 = Instant::now();
-    let rows = client.query(&sql, &[]).await.map_err(pg_err)?;
+    let rows = client.query(&base, &[]).await.map_err(pg_err)?;
     let ms = t0.elapsed().as_millis() as u64;
+    if rows.is_empty() {
+        let (columns, column_types) = fetch_column_defs(&client, schema, table).await?;
+        return Ok(TableDataResult {
+            columns,
+            column_types,
+            rows: vec![],
+            total,
+            limit,
+            offset,
+            execution_ms: ms,
+            ctids: vec![],
+            editable,
+            primary_keys,
+        });
+    }
     let (columns, column_types, data) = rows_to_json(&rows);
+    let n = data.len();
     Ok(TableDataResult {
         columns,
         column_types,
@@ -379,7 +540,104 @@ pub async fn op_get_table_data(
         limit,
         offset,
         execution_ms: ms,
+        ctids: vec![String::new(); n],
+        editable,
+        primary_keys,
     })
+}
+
+pub async fn op_insert_row(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    values: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    if values.is_empty() {
+        // Every column left on Default → let PostgreSQL fill the whole row.
+        let sql = format!("INSERT INTO {qs}.{qt} DEFAULT VALUES");
+        let handle = client_for(state, connection_id)?;
+        let client = handle.lock().await;
+        return client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64);
+    }
+    let mut cols = Vec::with_capacity(values.len());
+    let mut lits = Vec::with_capacity(values.len());
+    // Sort for deterministic SQL (helps tests / logs).
+    let mut keys: Vec<_> = values.keys().collect();
+    keys.sort();
+    for k in keys {
+        cols.push(quote_ident(k)?);
+        lits.push(json_to_literal(&values[k]));
+    }
+    let sql = format!("INSERT INTO {qs}.{qt} ({}) VALUES ({})", cols.join(", "), lits.join(", "));
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_update_row(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    ctid: String,
+    patch: std::collections::HashMap<String, serde_json::Value>,
+    defaults: Vec<String>,
+) -> Result<u64, String> {
+    if patch.is_empty() && defaults.is_empty() {
+        return Err("no changes provided".to_string());
+    }
+    validate_ctid(&ctid)?;
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let mut sets = Vec::with_capacity(patch.len() + defaults.len());
+    let mut keys: Vec<_> = patch.keys().collect();
+    keys.sort();
+    for k in keys {
+        let qc = quote_ident(k)?;
+        sets.push(format!("{qc} = {}", json_to_literal(&patch[k])));
+    }
+    let mut defaults = defaults;
+    defaults.sort();
+    for k in &defaults {
+        let qc = quote_ident(k)?;
+        sets.push(format!("{qc} = DEFAULT"));
+    }
+    let sql = format!("UPDATE {qs}.{qt} SET {} WHERE ctid = {}", sets.join(", "), quote_literal(&ctid));
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    let n = client.execute(sql.as_str(), &[]).await.map_err(pg_err)? as u64;
+    if n == 0 {
+        return Err("row no longer exists (it may have been updated or deleted) — please refresh".to_string());
+    }
+    Ok(n)
+}
+
+pub async fn op_delete_rows(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    ctids: Vec<String>,
+) -> Result<u64, String> {
+    if ctids.is_empty() {
+        return Err("no rows selected".to_string());
+    }
+    if ctids.len() > 1000 {
+        return Err("too many rows selected (max 1000)".to_string());
+    }
+    for c in &ctids {
+        validate_ctid(c)?;
+    }
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let list = ctids.iter().map(|c| quote_literal(c)).collect::<Vec<_>>().join(", ");
+    let sql = format!("DELETE FROM {qs}.{qt} WHERE ctid IN ({list})");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
 }
 
 pub async fn op_execute_sql(state: &DbState, connection_id: &str, sql: &str) -> Result<QueryResult, String> {

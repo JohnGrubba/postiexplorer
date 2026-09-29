@@ -53,6 +53,9 @@ export interface TableDataResult {
   limit: number;
   offset: number;
   execution_ms: number;
+  ctids: string[];
+  editable: boolean;
+  primary_keys: string[];
 }
 
 export interface QueryResult {

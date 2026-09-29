@@ -111,6 +111,27 @@ export async function executeSql(sql: string): Promise<QueryResult> {
   return invoke<QueryResult>("execute_sql", { connectionId, sql });
 }
 
+export async function insertRow(schema: string, table: string, values: Record<string, unknown>): Promise<number> {
+  if (!isTauri()) return mock.insertRow(schema, table, values);
+  return invoke<number>("insert_row", { connectionId, schema, table, values });
+}
+
+export async function updateRow(
+  schema: string,
+  table: string,
+  ctid: string,
+  patch: Record<string, unknown>,
+  defaults: string[] = [],
+): Promise<number> {
+  if (!isTauri()) return mock.updateRow(schema, table, ctid, patch, defaults);
+  return invoke<number>("update_row", { connectionId, schema, table, ctid, patch, defaults });
+}
+
+export async function deleteRows(schema: string, table: string, ctids: string[]): Promise<number> {
+  if (!isTauri()) return mock.deleteRows(schema, table, ctids);
+  return invoke<number>("delete_rows", { connectionId, schema, table, ctids });
+}
+
 export async function getServerInfo(): Promise<ServerInfo> {
   if (!isTauri()) return mock.getServerInfo();
   return invoke<ServerInfo>("get_server_info", { connectionId });

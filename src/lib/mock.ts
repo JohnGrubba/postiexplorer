@@ -50,7 +50,53 @@ const MOCK_COLUMNS: Record<string, ColumnEntry[]> = {
     { name: "price_cents", data_type: "integer", is_nullable: false, default_value: "0", is_primary: false },
     { name: "in_stock", data_type: "boolean", is_nullable: false, default_value: "true", is_primary: false },
   ],
+  sessions: [
+    { name: "id", data_type: "uuid", is_nullable: false, default_value: "gen_random_uuid()", is_primary: true },
+    { name: "user_id", data_type: "uuid", is_nullable: true, default_value: null, is_primary: false },
+    { name: "created_at", data_type: "timestamptz", is_nullable: true, default_value: "now()", is_primary: false },
+  ],
+  api_keys: [
+    { name: "id", data_type: "uuid", is_nullable: false, default_value: "gen_random_uuid()", is_primary: true },
+    { name: "label", data_type: "text", is_nullable: false, default_value: null, is_primary: false },
+    { name: "created_at", data_type: "timestamptz", is_nullable: true, default_value: "now()", is_primary: false },
+  ],
+  invoices: [
+    { name: "id", data_type: "bigint", is_nullable: false, default_value: null, is_primary: true },
+    { name: "total_cents", data_type: "integer", is_nullable: false, default_value: "0", is_primary: false },
+  ],
+  order_summary: [
+    { name: "email", data_type: "text", is_nullable: true, default_value: null, is_primary: false },
+    { name: "orders", data_type: "bigint", is_nullable: true, default_value: null, is_primary: false },
+  ],
 };
+
+function columnsFor(table: string): ColumnEntry[] {
+  return MOCK_COLUMNS[table] ?? MOCK_COLUMNS["users"];
+}
+
+function ctidFor(index: number): string {
+  return `(0,${index + 1})`;
+}
+
+function ctidToIndex(ctid: string): number {
+  const m = /^\((\d+),(\d+)\)$/.exec(ctid.trim());
+  if (!m) throw new Error(`invalid row id: ${ctid}`);
+  // Mock stores all rows in a single block; the tuple number is the 1-based index.
+  if (m[1] !== "0") throw new Error(`invalid row id: ${ctid}`);
+  return Number(m[2]) - 1;
+}
+
+/** Evaluate a column's DEFAULT expression into a mock value (dev-mode only). */
+function mockDefault(col: ColumnEntry): unknown {
+  const d = (col.default_value ?? "").trim();
+  if (d.length >= 2 && d.startsWith("'") && d.endsWith("'")) return d.slice(1, -1).replace(/''/g, "'");
+  if (d === "true") return true;
+  if (d === "false") return false;
+  if (/^-?\d+(\.\d+)?$/.test(d)) return Number(d);
+  if (/^now\(\)$/i.test(d)) return new Date().toISOString().slice(0, 16).replace("T", " ");
+  if (/^gen_random_uuid\(\)$/i.test(d)) return `mock-${Math.random().toString(36).slice(2, 8)}`;
+  return null;
+}
 
 const MOCK_ROWS: Record<string, unknown[][]> = {
   users: [
@@ -71,7 +117,22 @@ const MOCK_ROWS: Record<string, unknown[][]> = {
     ["SKU-002", "Zero-Knowledge Hoodie", 7999, true],
     ["SKU-003", "Gasless Mug", 1499, false],
   ],
+  sessions: [
+    ["aa…01", "9b1a…01", "2026-09-12 08:00"],
+    ["aa…02", "9b1a…02", "2026-09-12 09:00"],
+  ],
+  api_keys: [["kk…01", "ci-runner", "2026-09-01 08:00"]],
+  invoices: [
+    [5001, 4999],
+    [5002, 1299],
+  ],
+  order_summary: [
+    ["vitalik@eth.io", 2],
+    ["satoshi@btc.io", 1],
+  ],
 };
+
+const VIEW_TABLES = new Set(["order_summary"]);
 
 export const mock = {
   async testConnection(_p: ConnectionProfile): Promise<TestConnectionResult> {
@@ -123,25 +184,38 @@ export const mock = {
     orderDir?: string,
   ): Promise<TableDataResult> {
     await delay(180);
-    let rows = [...(MOCK_ROWS[table] ?? MOCK_ROWS["users"])];
-    const cols = (MOCK_COLUMNS[table] ?? MOCK_COLUMNS["users"]).map((c) => c.name);
-    const types = (MOCK_COLUMNS[table] ?? MOCK_COLUMNS["users"]).map((c) => c.data_type);
+    const cols = columnsFor(table);
+    const names = cols.map((c) => c.name);
+    const types = cols.map((c) => c.data_type);
+    const editable = !VIEW_TABLES.has(table);
+    const primary_keys = cols.filter((c) => c.is_primary).map((c) => c.name);
+    // Work on indices so ctids stay stable under sorting/paging.
+    let indices = (MOCK_ROWS[table] ?? []).map((_, i) => i);
     if (orderBy) {
-      const idx = cols.indexOf(orderBy);
+      const idx = names.indexOf(orderBy);
       if (idx >= 0) {
-        rows.sort((a, b) => {
-          const av = String(a[idx]);
-          const bv = String(b[idx]);
+        indices.sort((a, b) => {
+          const av = String((MOCK_ROWS[table] ?? [])[a][idx]);
+          const bv = String((MOCK_ROWS[table] ?? [])[b][idx]);
           return orderDir === "DESC" ? (av < bv ? 1 : -1) : av > bv ? 1 : -1;
         });
       }
     }
-    // inflate to 87 rows to show pagination
-    const base = [...rows];
-    while (rows.length < 87) rows.push(...base);
-    rows = rows.slice(0, 87);
-    const page = rows.slice(offset, offset + limit);
-    return { columns: cols, column_types: types, rows: page, total: rows.length, limit, offset, execution_ms: 12 };
+    const total = indices.length;
+    const pageIdx = indices.slice(offset, offset + limit);
+    const store = MOCK_ROWS[table] ?? [];
+    return {
+      columns: names,
+      column_types: types,
+      rows: pageIdx.map((i) => [...store[i]]),
+      total,
+      limit,
+      offset,
+      execution_ms: 12,
+      ctids: editable ? pageIdx.map(ctidFor) : [],
+      editable,
+      primary_keys,
+    };
   },
   async executeSql(sql: string): Promise<QueryResult> {
     await delay(220);
@@ -171,5 +245,57 @@ export const mock = {
       connection_count: 7,
       max_connections: 100,
     };
+  },
+  async insertRow(_schema: string, table: string, values: Record<string, unknown>): Promise<number> {
+    await delay(120);
+    if (VIEW_TABLES.has(table)) throw new Error("this view is read-only");
+    const cols = columnsFor(table);
+    if (!MOCK_ROWS[table]) MOCK_ROWS[table] = [];
+    MOCK_ROWS[table].push(
+      cols.map((c) => (c.name in values ? (values[c.name] as unknown) : c.default_value != null ? mockDefault(c) : null)),
+    );
+    return 1;
+  },
+  async updateRow(
+    _schema: string,
+    table: string,
+    ctid: string,
+    patch: Record<string, unknown>,
+    defaults: string[] = [],
+  ): Promise<number> {
+    await delay(120);
+    if (VIEW_TABLES.has(table)) throw new Error("this view is read-only");
+    const store = MOCK_ROWS[table];
+    if (!store) throw new Error(`table "${table}" not found`);
+    const idx = ctidToIndex(ctid);
+    const row = store[idx];
+    if (!row) throw new Error("row no longer exists (it may have been updated or deleted) — please refresh");
+    const cols = columnsFor(table);
+    for (const [k, v] of Object.entries(patch)) {
+      const ci = cols.findIndex((c) => c.name === k);
+      if (ci < 0) throw new Error(`unknown column: ${k}`);
+      row[ci] = v as unknown;
+    }
+    for (const k of defaults) {
+      const col = cols.find((c) => c.name === k);
+      if (!col) throw new Error(`unknown column: ${k}`);
+      row[cols.indexOf(col)] = mockDefault(col);
+    }
+    return 1;
+  },
+  async deleteRows(_schema: string, table: string, ctids: string[]): Promise<number> {
+    await delay(120);
+    if (VIEW_TABLES.has(table)) throw new Error("this view is read-only");
+    const store = MOCK_ROWS[table];
+    if (!store) throw new Error(`table "${table}" not found`);
+    const idxs = ctids.map(ctidToIndex).sort((a, b) => b - a);
+    let n = 0;
+    for (const i of idxs) {
+      if (i >= 0 && i < store.length) {
+        store.splice(i, 1);
+        n++;
+      }
+    }
+    return n;
   },
 };
