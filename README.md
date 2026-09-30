@@ -34,13 +34,11 @@ Or build locally — see [BUILD.md](BUILD.md).
 ## Screenshots
 
 ![connected database grid](screenshots/app-02-connected.png)
+![ER diagram](screenshots/app-11-er-diagram.png)
+![insert row dialog](screenshots/app-12-row-editor.png)
+![structure editing](screenshots/app-13-structure.png)
 ![database picker](screenshots/app-09-db-picker.png)
 ![SQL editor](screenshots/app-03-query.png)
-
-10 verified UI states in [`screenshots/`](screenshots/): `app-01-disconnected`,
-`app-02-connected`, `app-03-query`, `app-04-structure`, `app-05-server`,
-`app-06-connections`, `app-07-dialog`, `app-08-mock-badge`, `app-09-db-picker`,
-`app-10-db-switched`.
 
 ## Features
 
@@ -153,7 +151,7 @@ src-tauri/
 scripts/              sync-version.mjs (package.json → tauri.conf.json + Cargo.toml),
                       artifact-names.mjs (versionless bundle names),
                       build-release.mjs (collects bundles into ./releases/)
-screenshots/          10 verified UI states (app-01 … app-10)
+screenshots/          13 verified UI states (app-01 … app-13)
 seed.sql              demo_db seed (users/orders/products, order_summary view,
                       auth.sessions, billing.invoices)
 docker-compose.yml    Local postgres:16 + seed mount
