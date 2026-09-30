@@ -12,8 +12,6 @@
 
 ## Download
 
-## Download
-
 Direct downloads from the rolling
 [`latest` release](https://github.com/JohnGrubba/postiexplorer/releases/latest)
 (rebuilt by [CI](.github/workflows/build.yml) on every push to `main`):
