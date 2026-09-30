@@ -3,11 +3,14 @@ import type {
   ConnectionProfile,
   DatabaseEntry,
   ErModel,
+  NewColumnDef,
   QueryResult,
   SchemaEntry,
+  SchemaPrivileges,
   ServerInfo,
   TableDataResult,
   TableEntry,
+  TablePrivileges,
   TestConnectionResult,
 } from "../types";
 import { mock, setDatabase as setMockDatabase } from "./mock";
@@ -141,6 +144,66 @@ export async function getServerInfo(): Promise<ServerInfo> {
 export async function getErModel(): Promise<ErModel> {
   if (!isTauri()) return mock.getErModel();
   return invoke<ErModel>("get_er_model", { connectionId });
+}
+
+export async function getTablePrivileges(schema: string, table: string): Promise<TablePrivileges> {
+  if (!isTauri()) return mock.getTablePrivileges(schema, table);
+  return invoke<TablePrivileges>("get_table_privileges", { connectionId, schema, table });
+}
+
+export async function getSchemaPrivileges(schema: string): Promise<SchemaPrivileges> {
+  if (!isTauri()) return mock.getSchemaPrivileges(schema);
+  return invoke<SchemaPrivileges>("get_schema_privileges", { connectionId, schema });
+}
+
+export async function createTable(schema: string, table: string, columns: NewColumnDef[]): Promise<number> {
+  if (!isTauri()) return mock.createTable(schema, table, columns);
+  return invoke<number>("create_table", { connectionId, schema, table, columns });
+}
+
+export async function dropTable(schema: string, table: string): Promise<number> {
+  if (!isTauri()) return mock.dropTable(schema, table);
+  return invoke<number>("drop_table", { connectionId, schema, table });
+}
+
+export async function addColumn(schema: string, table: string, column: NewColumnDef): Promise<number> {
+  if (!isTauri()) return mock.addColumn(schema, table, column);
+  return invoke<number>("add_column", { connectionId, schema, table, column });
+}
+
+export async function dropColumn(schema: string, table: string, column: string): Promise<number> {
+  if (!isTauri()) return mock.dropColumn(schema, table, column);
+  return invoke<number>("drop_column", { connectionId, schema, table, column });
+}
+
+export async function renameColumn(schema: string, table: string, oldName: string, newName: string): Promise<number> {
+  if (!isTauri()) return mock.renameColumn(schema, table, oldName, newName);
+  return invoke<number>("rename_column", { connectionId, schema, table, oldName, newName });
+}
+
+export async function alterColumnType(schema: string, table: string, column: string, newType: string): Promise<number> {
+  if (!isTauri()) return mock.alterColumnType(schema, table, column, newType);
+  return invoke<number>("alter_column_type", { connectionId, schema, table, column, newType });
+}
+
+export async function setColumnNullable(
+  schema: string,
+  table: string,
+  column: string,
+  nullable: boolean,
+): Promise<number> {
+  if (!isTauri()) return mock.setColumnNullable(schema, table, column, nullable);
+  return invoke<number>("set_column_nullable", { connectionId, schema, table, column, nullable });
+}
+
+export async function setColumnDefault(
+  schema: string,
+  table: string,
+  column: string,
+  defaultValue: string | null,
+): Promise<number> {
+  if (!isTauri()) return mock.setColumnDefault(schema, table, column, defaultValue);
+  return invoke<number>("set_column_default", { connectionId, schema, table, column, defaultValue });
 }
 
 export { isTauri };

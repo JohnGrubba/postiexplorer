@@ -88,6 +88,25 @@ export default function TableDataView({ schema, table }: Props) {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1;
   const editable = data?.editable ?? false;
+  const canInsert = data?.can_insert ?? false;
+  const canUpdate = data?.can_update ?? false;
+  const canDelete = data?.can_delete ?? false;
+  const canEditRows = editable && (canUpdate || canDelete);
+  const addTitle = !data
+    ? "Loading…"
+    : !editable
+      ? "This relation is read-only"
+      : !canInsert
+        ? "Missing INSERT privilege on this table"
+        : "Insert a new row";
+  const editTitle =
+    selected.size !== 1
+      ? "Select exactly one row to edit"
+      : !editable
+        ? "This relation is read-only"
+        : !canUpdate
+          ? "Missing UPDATE privilege on this table"
+          : "Edit selected row";
 
   async function ensureColumns(): Promise<ColumnEntry[]> {
     if (cols.length > 0) return cols;
@@ -237,9 +256,17 @@ export default function TableDataView({ schema, table }: Props) {
               read-only
             </span>
           )}
+          {data && editable && (!canInsert || !canUpdate || !canDelete) && (
+            <span
+              className="ml-2 rounded-full bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300"
+              title={`Privileges: SELECT ${data.can_select ? "✓" : "✗"} · INSERT ${canInsert ? "✓" : "✗"} · UPDATE ${canUpdate ? "✓" : "✗"} · DELETE ${canDelete ? "✓" : "✗"}`}
+            >
+              limited privileges
+            </span>
+          )}
           {selected.size > 0 && <span className="ml-2 rounded-full bg-neon/15 px-2 py-0.5 text-[10px] font-semibold text-neon">{selected.size} selected</span>}
         </div>
-        <button onClick={openInsert} disabled={!editable} title={editable ? "Insert a new row" : "This relation is read-only"} className={btn}>
+        <button onClick={openInsert} disabled={!editable || !canInsert} title={addTitle} className={btn}>
           <Plus size={13} /> Add
         </button>
         <button
@@ -247,8 +274,8 @@ export default function TableDataView({ schema, table }: Props) {
             const [first] = [...selected];
             if (first !== undefined) void openEdit(first);
           }}
-          disabled={!editable || selected.size !== 1}
-          title={selected.size !== 1 ? "Select exactly one row to edit" : "Edit selected row"}
+          disabled={!editable || !canUpdate || selected.size !== 1}
+          title={editTitle}
           className={btn}
         >
           <Pencil size={13} /> Edit
@@ -258,8 +285,16 @@ export default function TableDataView({ schema, table }: Props) {
             setMutError(null);
             setShowDelete(true);
           }}
-          disabled={!editable || selected.size === 0}
-          title={selected.size === 0 ? "Select at least one row to delete" : `Delete ${selected.size} row(s)`}
+          disabled={!editable || !canDelete || selected.size === 0}
+          title={
+            selected.size === 0
+              ? "Select at least one row to delete"
+              : !editable
+                ? "This relation is read-only"
+                : !canDelete
+                  ? "Missing DELETE privilege on this table"
+                  : `Delete ${selected.size} row(s)`
+          }
           className={`${btn} hover:border-red-500/40 hover:text-red-300`}
         >
           <Trash2 size={13} /> Delete{selected.size > 1 ? ` (${selected.size})` : ""}
@@ -298,15 +333,20 @@ export default function TableDataView({ schema, table }: Props) {
         orderDir={orderDir}
         onSort={toggleSort}
         emptyHint={loading ? "Loading rows…" : editable ? "No rows in this table — use Add to insert one" : "No rows in this relation"}
-        selectable={editable}
+        selectable={canEditRows}
         selected={selected}
         onToggleRow={toggleRow}
         onToggleAll={toggleAll}
         actions={
-          editable
+          canEditRows
             ? (ri) => (
                 <span className="inline-flex gap-0.5">
-                  <button onClick={() => void openEdit(ri)} title="Edit row" className={iconBtn}>
+                  <button
+                    onClick={() => void openEdit(ri)}
+                    title={canUpdate ? "Edit row" : "Missing UPDATE privilege"}
+                    disabled={!canUpdate}
+                    className={iconBtn}
+                  >
                     <Pencil size={13} />
                   </button>
                   <button
@@ -315,7 +355,8 @@ export default function TableDataView({ schema, table }: Props) {
                       setMutError(null);
                       setShowDelete(true);
                     }}
-                    title="Delete row"
+                    title={canDelete ? "Delete row" : "Missing DELETE privilege"}
+                    disabled={!canDelete}
                     className={iconBtn}
                   >
                     <Trash2 size={13} />

@@ -22,11 +22,14 @@ export interface DatabaseEntry {
   name: string;
   size_pretty: string;
   owner: string;
+  can_connect: boolean;
 }
 
 export interface SchemaEntry {
   name: string;
   table_count: number;
+  can_usage: boolean;
+  can_create: boolean;
 }
 
 export interface TableEntry {
@@ -35,6 +38,7 @@ export interface TableEntry {
   kind: "table" | "view" | "materialized_view" | "foreign_table";
   rows_estimate: number;
   size_pretty: string;
+  can_select: boolean;
 }
 
 export interface ColumnEntry {
@@ -56,6 +60,10 @@ export interface TableDataResult {
   ctids: string[];
   editable: boolean;
   primary_keys: string[];
+  can_select: boolean;
+  can_insert: boolean;
+  can_update: boolean;
+  can_delete: boolean;
 }
 
 export interface QueryResult {
@@ -114,6 +122,37 @@ export interface ErDetailOptions {
   colorBySchema: boolean;
   /** Compact mode: show only PK / FK / linked columns, hide the rest. */
   relationsOnly: boolean;
+}
+
+export interface TablePrivileges {
+  current_user: string;
+  is_superuser: boolean;
+  is_owner: boolean;
+  select: boolean;
+  insert: boolean;
+  update: boolean;
+  delete: boolean;
+  truncate: boolean;
+  references: boolean;
+  trigger: boolean;
+  can_alter: boolean;
+  can_drop: boolean;
+}
+
+export interface SchemaPrivileges {
+  current_user: string;
+  is_superuser: boolean;
+  is_owner: boolean;
+  usage: boolean;
+  create: boolean;
+}
+
+export interface NewColumnDef {
+  name: string;
+  data_type: string;
+  is_nullable: boolean;
+  default_value: string | null;
+  is_primary: boolean;
 }
 
 // ── Extension points for future features (keep stable API) ──

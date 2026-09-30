@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, History, Play, Trash2 } from "lucide-react";
 import { executeSql } from "../lib/api";
+import { buildCsv, downloadTextFile } from "../lib/download";
 import type { QueryResult } from "../types";
 import DataGrid from "./DataGrid";
 
@@ -184,19 +185,10 @@ export default function QueryView({
     }
   }
 
-  function exportCsv() {
+  async function exportCsv() {
     if (!result || result.columns.length === 0) return;
-    const esc = (v: unknown) => {
-      const s = v === null || v === undefined ? "" : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const csv = [result.columns.join(","), ...result.rows.map((r) => r.map(esc).join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "query-result.csv";
-    a.click();
-    URL.revokeObjectURL(a.href);
+    const csv = buildCsv(result.columns, result.rows);
+    await downloadTextFile("query-result.csv", csv, "text/csv;charset=utf-8");
   }
 
   return (

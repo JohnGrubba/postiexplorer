@@ -254,3 +254,234 @@ async fn row_crud_flow() {
     db::op_execute_sql(&state, &id, "DROP TABLE public.__px_crud_test").await.expect("cleanup");
     db::close_connection(&state, &id);
 }
+
+#[tokio::test]
+async fn privileges_owner_has_full_access() {
+    let state = DbState::default();
+    let id = db::open_connection(&state, profile()).await.expect("connect");
+
+    // Lists now carry privilege flags for up-front gating.
+    let dbs = db::op_list_databases(&state, &id).await.expect("databases");
+    let demo = dbs.iter().find(|d| d.name == "demo_db").expect("demo_db");
+    assert!(demo.can_connect, "owner should CONNECT to demo_db: {demo:?}");
+
+    let schemas = db::op_list_schemas(&state, &id).await.expect("schemas");
+    let public = schemas.iter().find(|s| s.name == "public").expect("public schema");
+    assert!(public.can_usage, "owner should have USAGE: {public:?}");
+    assert!(public.can_create, "owner should have CREATE: {public:?}");
+
+    let tables = db::op_list_tables(&state, &id, "public").await.expect("tables");
+    let users_entry = tables.iter().find(|t| t.name == "users").expect("users entry");
+    assert!(users_entry.can_select, "owner should SELECT: {users_entry:?}");
+
+    // Detailed table privileges.
+    let privs = db::op_get_table_privileges(&state, &id, "public", "users")
+        .await
+        .expect("table privs");
+    assert_eq!(privs.current_user, "postgres");
+    assert!(privs.is_superuser);
+    assert!(privs.select && privs.insert && privs.update && privs.delete, "privs: {privs:?}");
+    assert!(privs.can_alter && privs.can_drop, "owner/superuser can ALTER/DROP: {privs:?}");
+
+    let sprivs = db::op_get_schema_privileges(&state, &id, "public")
+        .await
+        .expect("schema privs");
+    assert!(sprivs.usage && sprivs.create, "sprivs: {sprivs:?}");
+
+    // TableDataResult carries the same flags so the Data tab can disable
+    // Add/Edit/Delete without waiting for a permission-denied error.
+    let page = db::op_get_table_data(&state, &id, "public", "users", 5, 0, None, None)
+        .await
+        .expect("page");
+    assert!(page.can_select && page.can_insert && page.can_update && page.can_delete, "page privs: {:?}", (&page.can_select, &page.can_insert, &page.can_update, &page.can_delete));
+
+    // Views are readable but never row-editable.
+    let view_privs = db::op_get_table_privileges(&state, &id, "public", "order_summary")
+        .await
+        .expect("view privs");
+    assert!(view_privs.select, "view privs: {view_privs:?}");
+    let view_page = db::op_get_table_data(&state, &id, "public", "order_summary", 5, 0, None, None)
+        .await
+        .expect("view page");
+    assert!(!view_page.editable);
+
+    db::close_connection(&state, &id);
+}
+
+#[tokio::test]
+async fn ddl_structure_flow() {
+    use postiexplorer::models::NewColumnDef;
+    let state = DbState::default();
+    let id = db::open_connection(&state, profile()).await.expect("connect");
+    let tbl = "public.__px_ddl_test";
+
+    db::op_execute_sql(&state, &id, &format!("DROP TABLE IF EXISTS {tbl}"))
+        .await
+        .expect("drop stale");
+
+    // CREATE TABLE via the structured API (identifiers quoted, types validated).
+    let cols = vec![
+        NewColumnDef { name: "id".into(), data_type: "UUID".into(), is_nullable: false, default_value: Some("gen_random_uuid()".into()), is_primary: true },
+        NewColumnDef { name: "nick".into(), data_type: "TEXT".into(), is_nullable: true, default_value: None, is_primary: false },
+        NewColumnDef { name: "score".into(), data_type: "INTEGER".into(), is_nullable: false, default_value: Some("0".into()), is_primary: false },
+    ];
+    db::op_create_table(&state, &id, "public", "__px_ddl_test", cols)
+        .await
+        .expect("create table");
+
+    let got = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("columns");
+    assert_eq!(got.len(), 3);
+    assert!(got.iter().find(|c| c.name == "id").unwrap().is_primary);
+
+    // Validation: duplicate names, unsafe types/defaults rejected before SQL.
+    let dup = vec![
+        NewColumnDef { name: "a".into(), data_type: "TEXT".into(), is_nullable: true, default_value: None, is_primary: false },
+        NewColumnDef { name: "A".into(), data_type: "TEXT".into(), is_nullable: true, default_value: None, is_primary: false },
+    ];
+    assert!(db::op_create_table(&state, &id, "public", "__px_ddl_dup", dup).await.is_err());
+    let evil_type = NewColumnDef { name: "x".into(), data_type: "TEXT; DROP TABLE public.users; --".into(), is_nullable: true, default_value: None, is_primary: false };
+    assert!(db::op_add_column(&state, &id, "public", "__px_ddl_test", evil_type).await.is_err());
+
+    // ADD COLUMN.
+    db::op_add_column(
+        &state,
+        &id,
+        "public",
+        "__px_ddl_test",
+        NewColumnDef { name: "extra".into(), data_type: "VARCHAR(50)".into(), is_nullable: true, default_value: Some("'hi'".into()), is_primary: false },
+    )
+    .await
+    .expect("add column");
+    let after_add = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after add");
+    assert_eq!(after_add.len(), 4);
+    let extra_def = after_add.iter().find(|c| c.name == "extra").unwrap().default_value.clone().unwrap_or_default();
+    assert!(extra_def.contains("'hi'"), "extra default: {extra_def}");
+
+    // RENAME COLUMN.
+    db::op_rename_column(&state, &id, "public", "__px_ddl_test", "nick", "nickname")
+        .await
+        .expect("rename");
+    let after_rename = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after rename");
+    assert!(after_rename.iter().any(|c| c.name == "nickname"));
+    assert!(!after_rename.iter().any(|c| c.name == "nick"));
+
+    // ALTER TYPE + NULLABLE + DEFAULT.
+    db::op_alter_column_type(&state, &id, "public", "__px_ddl_test", "score", "BIGINT")
+        .await
+        .expect("alter type");
+    let after_type = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after type");
+    assert!(after_type.iter().find(|c| c.name == "score").unwrap().data_type.contains("bigint"));
+
+    db::op_set_column_nullable(&state, &id, "public", "__px_ddl_test", "nickname", false)
+        .await
+        .expect("set not null");
+    let after_nn = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after nn");
+    assert!(!after_nn.iter().find(|c| c.name == "nickname").unwrap().is_nullable);
+
+    db::op_set_column_default(&state, &id, "public", "__px_ddl_test", "nickname", Some("'anon'".into()))
+        .await
+        .expect("set default");
+    let after_def = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after def");
+    let nick_def = after_def.iter().find(|c| c.name == "nickname").unwrap().default_value.clone().unwrap_or_default();
+    assert!(nick_def.contains("'anon'"), "nickname default: {nick_def}");
+    db::op_set_column_default(&state, &id, "public", "__px_ddl_test", "nickname", None)
+        .await
+        .expect("drop default");
+    let after_drop_def = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after drop def");
+    assert!(after_drop_def.iter().find(|c| c.name == "nickname").unwrap().default_value.is_none());
+
+    // Unsafe default chained statements rejected.
+    assert!(
+        db::op_set_column_default(&state, &id, "public", "__px_ddl_test", "nickname", Some("1; DROP TABLE x".into()))
+            .await
+            .is_err()
+    );
+
+    // DROP COLUMN + DROP TABLE.
+    db::op_drop_column(&state, &id, "public", "__px_ddl_test", "extra")
+        .await
+        .expect("drop column");
+    let after_drop = db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.expect("after drop col");
+    assert!(!after_drop.iter().any(|c| c.name == "extra"));
+
+    db::op_drop_table(&state, &id, "public", "__px_ddl_test")
+        .await
+        .expect("drop table");
+    assert!(db::op_get_columns(&state, &id, "public", "__px_ddl_test").await.unwrap().is_empty()
+        || db::op_get_table_data(&state, &id, "public", "__px_ddl_test", 1, 0, None, None).await.is_err());
+
+    db::close_connection(&state, &id);
+}
+
+#[tokio::test]
+async fn permissions_gating_readonly_user() {
+    use postiexplorer::models::NewColumnDef;
+    let admin_state = DbState::default();
+    let admin_id = db::open_connection(&admin_state, profile()).await.expect("admin connect");
+
+    // Fresh readonly role with only SELECT (no CREATE/INSERT/UPDATE/DELETE/ALTER).
+    // Scope GRANTs to the single test table so parallel tests sharing `public`
+    // are unaffected (no blanket ON ALL TABLES / DEFAULT PRIVILEGES).
+    db::op_execute_sql(&admin_state, &admin_id, "DROP TABLE IF EXISTS public.__px_priv_test").await.expect("drop stale priv table");
+    db::op_execute_sql(&admin_state, &admin_id, "CREATE TABLE public.__px_priv_test (a TEXT NOT NULL, b INT DEFAULT 1)").await.expect("create priv table");
+    db::op_execute_sql(&admin_state, &admin_id, "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='px_readonly') THEN CREATE ROLE px_readonly LOGIN PASSWORD 'readonly123'; END IF; END $$").await.expect("create role");
+    db::op_execute_sql(&admin_state, &admin_id, "GRANT CONNECT ON DATABASE demo_db TO px_readonly").await.expect("grant connect");
+    db::op_execute_sql(&admin_state, &admin_id, "GRANT USAGE ON SCHEMA public TO px_readonly").await.expect("grant usage");
+    db::op_execute_sql(&admin_state, &admin_id, "GRANT SELECT ON public.__px_priv_test TO px_readonly").await.expect("grant select");
+    // Make sure no write privileges linger from previous runs (scoped to this table only).
+    db::op_execute_sql(&admin_state, &admin_id, "REVOKE CREATE ON SCHEMA public FROM px_readonly").await.ok();
+    db::op_execute_sql(&admin_state, &admin_id, "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.__px_priv_test FROM px_readonly").await.ok();
+
+    let mut ro = profile();
+    ro.user = "px_readonly".into();
+    ro.password = "readonly123".into();
+    let ro_state = DbState::default();
+    let ro_id = db::open_connection(&ro_state, ro).await.expect("readonly connect");
+
+    // Read allowed, writes gated.
+    let privs = db::op_get_table_privileges(&ro_state, &ro_id, "public", "__px_priv_test").await.expect("ro privs");
+    assert_eq!(privs.current_user, "px_readonly");
+    assert!(!privs.is_superuser);
+    assert!(!privs.is_owner);
+    assert!(privs.select, "readonly should SELECT: {privs:?}");
+    assert!(!privs.insert && !privs.update && !privs.delete, "readonly must not write: {privs:?}");
+    assert!(!privs.can_alter && !privs.can_drop, "readonly must not ALTER/DROP: {privs:?}");
+
+    let sprivs = db::op_get_schema_privileges(&ro_state, &ro_id, "public").await.expect("ro schema privs");
+    assert!(sprivs.usage, "readonly should have USAGE: {sprivs:?}");
+    assert!(!sprivs.create, "readonly must not CREATE: {sprivs:?}");
+
+    let page = db::op_get_table_data(&ro_state, &ro_id, "public", "__px_priv_test", 10, 0, None, None).await.expect("ro page");
+    assert!(page.can_select);
+    assert!(!page.can_insert && !page.can_update && !page.can_delete, "page flags must gate buttons: {:?}", (&page.can_insert, &page.can_update, &page.can_delete));
+
+    let tables = db::op_list_tables(&ro_state, &ro_id, "public").await.expect("ro tables");
+    let entry = tables.iter().find(|t| t.name == "__px_priv_test").expect("priv test entry");
+    assert!(entry.can_select);
+
+    // DDL as readonly must fail with a permission error (frontend disables these up-front).
+    let new_cols = vec![NewColumnDef { name: "x".into(), data_type: "TEXT".into(), is_nullable: true, default_value: None, is_primary: false }];
+    let create_err = db::op_create_table(&ro_state, &ro_id, "public", "__px_priv_nope", new_cols).await.expect_err("readonly create must fail");
+    assert!(create_err.to_lowercase().contains("permission") || create_err.to_lowercase().contains("denied"), "got: {create_err}");
+    let add_err = db::op_add_column(
+        &ro_state,
+        &ro_id,
+        "public",
+        "__px_priv_test",
+        NewColumnDef { name: "nope".into(), data_type: "TEXT".into(), is_nullable: true, default_value: None, is_primary: false },
+    )
+    .await
+    .expect_err("readonly add must fail");
+    assert!(add_err.to_lowercase().contains("permission") || add_err.to_lowercase().contains("denied") || add_err.contains("must be owner"), "got: {add_err}");
+
+    // DML as readonly must also fail server-side (belt and braces behind disabled buttons).
+    let mut v = HashMap::new();
+    v.insert("a".to_string(), serde_json::json!("hi"));
+    assert!(db::op_insert_row(&ro_state, &ro_id, "public", "__px_priv_test", v).await.is_err());
+
+    db::close_connection(&ro_state, &ro_id);
+    db::op_execute_sql(&admin_state, &admin_id, "DROP TABLE IF EXISTS public.__px_priv_test").await.expect("cleanup priv table");
+    db::op_execute_sql(&admin_state, &admin_id, "DROP OWNED BY px_readonly").await.ok();
+    db::op_execute_sql(&admin_state, &admin_id, "DROP ROLE IF EXISTS px_readonly").await.expect("drop role");
+    db::close_connection(&admin_state, &admin_id);
+}

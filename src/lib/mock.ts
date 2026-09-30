@@ -3,11 +3,14 @@ import type {
   ConnectionProfile,
   DatabaseEntry,
   ErModel,
+  NewColumnDef,
   QueryResult,
   SchemaEntry,
+  SchemaPrivileges,
   ServerInfo,
   TableDataResult,
   TableEntry,
+  TablePrivileges,
   TestConnectionResult,
 } from "../types";
 
@@ -143,34 +146,34 @@ export const mock = {
   async listDatabases(): Promise<DatabaseEntry[]> {
     await delay(200);
     return [
-      { name: "demo_db", size_pretty: "42 MB", owner: "postgres" },
-      { name: "analytics", size_pretty: "128 MB", owner: "postgres" },
-      { name: "postgres", size_pretty: "8 MB", owner: "postgres" },
+      { name: "demo_db", size_pretty: "42 MB", owner: "postgres", can_connect: true },
+      { name: "analytics", size_pretty: "128 MB", owner: "postgres", can_connect: true },
+      { name: "postgres", size_pretty: "8 MB", owner: "postgres", can_connect: true },
     ];
   },
   async listSchemas(): Promise<SchemaEntry[]> {
     await delay(150);
     return [
-      { name: "public", table_count: 3 },
-      { name: "auth", table_count: 2 },
-      { name: "billing", table_count: 1 },
+      { name: "public", table_count: 3, can_usage: true, can_create: true },
+      { name: "auth", table_count: 2, can_usage: true, can_create: true },
+      { name: "billing", table_count: 1, can_usage: true, can_create: true },
     ];
   },
   async listTables(schema: string): Promise<TableEntry[]> {
     await delay(150);
     if (schema === "public")
       return [
-        { schema, name: "users", kind: "table", rows_estimate: 12480, size_pretty: "4.2 MB" },
-        { schema, name: "orders", kind: "table", rows_estimate: 88410, size_pretty: "18.6 MB" },
-        { schema, name: "products", kind: "table", rows_estimate: 320, size_pretty: "256 kB" },
-        { schema, name: "order_summary", kind: "view", rows_estimate: 0, size_pretty: "—" },
+        { schema, name: "users", kind: "table", rows_estimate: 12480, size_pretty: "4.2 MB", can_select: true },
+        { schema, name: "orders", kind: "table", rows_estimate: 88410, size_pretty: "18.6 MB", can_select: true },
+        { schema, name: "products", kind: "table", rows_estimate: 320, size_pretty: "256 kB", can_select: true },
+        { schema, name: "order_summary", kind: "view", rows_estimate: 0, size_pretty: "—", can_select: true },
       ];
     if (schema === "auth")
       return [
-        { schema, name: "sessions", kind: "table", rows_estimate: 2100, size_pretty: "1.1 MB" },
-        { schema, name: "api_keys", kind: "table", rows_estimate: 84, size_pretty: "64 kB" },
+        { schema, name: "sessions", kind: "table", rows_estimate: 2100, size_pretty: "1.1 MB", can_select: true },
+        { schema, name: "api_keys", kind: "table", rows_estimate: 84, size_pretty: "64 kB", can_select: true },
       ];
-    return [{ schema, name: "invoices", kind: "table", rows_estimate: 5120, size_pretty: "2.4 MB" }];
+    return [{ schema, name: "invoices", kind: "table", rows_estimate: 5120, size_pretty: "2.4 MB", can_select: true }];
   },
   async getColumns(_schema: string, table: string): Promise<ColumnEntry[]> {
     await delay(120);
@@ -216,6 +219,10 @@ export const mock = {
       ctids: editable ? pageIdx.map(ctidFor) : [],
       editable,
       primary_keys,
+      can_select: true,
+      can_insert: editable,
+      can_update: editable,
+      can_delete: editable,
     };
   },
   async executeSql(sql: string): Promise<QueryResult> {
@@ -333,5 +340,104 @@ export const mock = {
       }
     }
     return n;
+  },
+  async getTablePrivileges(_schema: string, table: string): Promise<TablePrivileges> {
+    await delay(80);
+    const editable = !VIEW_TABLES.has(table);
+    return {
+      current_user: "postgres",
+      is_superuser: true,
+      is_owner: true,
+      select: true,
+      insert: editable,
+      update: editable,
+      delete: editable,
+      truncate: editable,
+      references: true,
+      trigger: editable,
+      can_alter: editable,
+      can_drop: editable,
+    };
+  },
+  async getSchemaPrivileges(_schema: string): Promise<SchemaPrivileges> {
+    await delay(80);
+    return { current_user: "postgres", is_superuser: true, is_owner: true, usage: true, create: true };
+  },
+  async createTable(_schema: string, table: string, columns: NewColumnDef[]): Promise<number> {
+    await delay(120);
+    if (!table.trim()) throw new Error("table name is required");
+    if (columns.length === 0) throw new Error("at least one column is required");
+    if (MOCK_COLUMNS[table]) throw new Error(`table "${table}" already exists (mock)`);
+    MOCK_COLUMNS[table] = columns.map((c) => ({
+      name: c.name,
+      data_type: c.data_type,
+      is_nullable: c.is_nullable,
+      default_value: c.default_value,
+      is_primary: c.is_primary,
+    }));
+    MOCK_ROWS[table] = [];
+    return 1;
+  },
+  async dropTable(_schema: string, table: string): Promise<number> {
+    await delay(120);
+    delete MOCK_COLUMNS[table];
+    delete MOCK_ROWS[table];
+    return 1;
+  },
+  async addColumn(_schema: string, table: string, column: NewColumnDef): Promise<number> {
+    await delay(120);
+    if (VIEW_TABLES.has(table)) throw new Error("this view is read-only");
+    const cols = columnsFor(table);
+    if (cols.some((c) => c.name === column.name)) throw new Error(`column "${column.name}" already exists`);
+    cols.push({
+      name: column.name,
+      data_type: column.data_type,
+      is_nullable: column.is_nullable,
+      default_value: column.default_value,
+      is_primary: column.is_primary,
+    });
+    MOCK_COLUMNS[table] = cols;
+    for (const row of MOCK_ROWS[table] ?? []) row.push(null);
+    return 1;
+  },
+  async dropColumn(_schema: string, table: string, column: string): Promise<number> {
+    await delay(120);
+    if (VIEW_TABLES.has(table)) throw new Error("this view is read-only");
+    const cols = columnsFor(table);
+    const idx = cols.findIndex((c) => c.name === column);
+    if (idx < 0) throw new Error(`column "${column}" not found`);
+    cols.splice(idx, 1);
+    for (const row of MOCK_ROWS[table] ?? []) row.splice(idx, 1);
+    return 1;
+  },
+  async renameColumn(_schema: string, table: string, oldName: string, newName: string): Promise<number> {
+    await delay(120);
+    const cols = columnsFor(table);
+    const col = cols.find((c) => c.name === oldName);
+    if (!col) throw new Error(`column "${oldName}" not found`);
+    if (cols.some((c) => c.name === newName)) throw new Error(`column "${newName}" already exists`);
+    col.name = newName;
+    return 1;
+  },
+  async alterColumnType(_schema: string, table: string, column: string, newType: string): Promise<number> {
+    await delay(120);
+    const col = columnsFor(table).find((c) => c.name === column);
+    if (!col) throw new Error(`column "${column}" not found`);
+    col.data_type = newType;
+    return 1;
+  },
+  async setColumnNullable(_schema: string, table: string, column: string, nullable: boolean): Promise<number> {
+    await delay(120);
+    const col = columnsFor(table).find((c) => c.name === column);
+    if (!col) throw new Error(`column "${column}" not found`);
+    col.is_nullable = nullable;
+    return 1;
+  },
+  async setColumnDefault(_schema: string, table: string, column: string, defaultValue: string | null): Promise<number> {
+    await delay(120);
+    const col = columnsFor(table).find((c) => c.name === column);
+    if (!col) throw new Error(`column "${column}" not found`);
+    col.default_value = defaultValue;
+    return 1;
   },
 };

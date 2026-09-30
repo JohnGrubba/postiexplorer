@@ -273,7 +273,8 @@ pub async fn op_list_databases(state: &DbState, connection_id: &str) -> Result<V
     let client = handle.lock().await;
     let rows = client
         .query(
-            "SELECT d.datname, pg_size_pretty(pg_database_size(d.datname)), pg_get_userbyid(d.datdba)
+            "SELECT d.datname, pg_size_pretty(pg_database_size(d.datname)), pg_get_userbyid(d.datdba),
+                    has_database_privilege(d.datname, 'CONNECT')
              FROM pg_database d WHERE NOT d.datistemplate ORDER BY d.datname",
             &[],
         )
@@ -283,8 +284,9 @@ pub async fn op_list_databases(state: &DbState, connection_id: &str) -> Result<V
         .into_iter()
         .map(|r| DatabaseEntry {
             name: r.get(0),
-            size_pretty: r.get(1),
-            owner: r.get(2),
+            size_pretty: r.get::<_, Option<String>>(1).unwrap_or_else(|| "—".to_string()),
+            owner: r.get::<_, Option<String>>(2).unwrap_or_default(),
+            can_connect: r.get::<_, Option<bool>>(3).unwrap_or(false),
         })
         .collect())
 }
@@ -294,7 +296,9 @@ pub async fn op_list_schemas(state: &DbState, connection_id: &str) -> Result<Vec
     let client = handle.lock().await;
     let rows = client
         .query(
-            "SELECT n.nspname, COUNT(c.oid)
+            "SELECT n.nspname, COUNT(c.oid),
+                    has_schema_privilege(n.nspname, 'USAGE'),
+                    has_schema_privilege(n.nspname, 'CREATE')
              FROM pg_namespace n LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r','v','m','f','p')
              WHERE n.nspname NOT IN ('pg_toast','pg_catalog','information_schema')
              GROUP BY n.nspname ORDER BY n.nspname",
@@ -307,6 +311,8 @@ pub async fn op_list_schemas(state: &DbState, connection_id: &str) -> Result<Vec
         .map(|r| SchemaEntry {
             name: r.get(0),
             table_count: r.get::<_, i64>(1),
+            can_usage: r.get::<_, Option<bool>>(2).unwrap_or(false),
+            can_create: r.get::<_, Option<bool>>(3).unwrap_or(false),
         })
         .collect())
 }
@@ -320,7 +326,8 @@ pub async fn op_list_tables(state: &DbState, connection_id: &str, schema: &str) 
                     CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view'
                          WHEN 'm' THEN 'materialized_view' WHEN 'f' THEN 'foreign_table' ELSE 'table' END,
                     COALESCE(c.reltuples::bigint, 0),
-                    pg_size_pretty(pg_total_relation_size(c.oid))
+                    pg_size_pretty(pg_total_relation_size(c.oid)),
+                    has_table_privilege(c.oid, 'SELECT')
              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = $1 AND c.relkind IN ('r','v','m','f','p')
              ORDER BY c.relname",
@@ -335,7 +342,11 @@ pub async fn op_list_tables(state: &DbState, connection_id: &str, schema: &str) 
             name: r.get(0),
             kind: r.get(1),
             rows_estimate: r.get(2),
-            size_pretty: r.get(3),
+            // pg_total_relation_size can return NULL for a relation dropped
+            // concurrently (parallel tests / other sessions) — never let a
+            // missing size crash the whole tree.
+            size_pretty: r.get::<_, Option<String>>(3).unwrap_or_else(|| "—".to_string()),
+            can_select: r.get::<_, Option<bool>>(4).unwrap_or(false),
         })
         .collect())
 }
@@ -441,6 +452,23 @@ pub async fn op_get_table_data(
     let mut editable = matches!(relkind.as_str(), "r" | "p" | "f");
     let primary_keys = fetch_primary_keys(&client, schema, table).await.unwrap_or_default();
 
+    // Per-privilege gating so the frontend can disable buttons up-front
+    // instead of surfacing "permission denied" after the fact.
+    let priv_row = client
+        .query_one(
+            "SELECT has_table_privilege(format('%I.%I', $1::text, $2::text), 'SELECT'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'INSERT'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'UPDATE'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'DELETE')",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    let can_select: bool = priv_row.get(0);
+    let can_insert: bool = priv_row.get(1);
+    let can_update: bool = priv_row.get(2);
+    let can_delete: bool = priv_row.get(3);
+
     let total: i64 = client
         .query_one(&format!("SELECT COUNT(*) FROM {qs}.{qt}"), &[])
         .await
@@ -476,7 +504,11 @@ pub async fn op_get_table_data(
                         execution_ms: ms,
                         ctids: vec![],
                         editable,
-                        primary_keys,
+                        primary_keys: primary_keys.clone(),
+                        can_select,
+                        can_insert,
+                        can_update,
+                        can_delete,
                     });
                 }
                 let ncols = rows[0].len();
@@ -501,7 +533,11 @@ pub async fn op_get_table_data(
                     execution_ms: ms,
                     ctids,
                     editable,
-                    primary_keys,
+                    primary_keys: primary_keys.clone(),
+                    can_select,
+                    can_insert,
+                    can_update,
+                    can_delete,
                 });
             }
             Err(_) => {
@@ -527,7 +563,11 @@ pub async fn op_get_table_data(
             execution_ms: ms,
             ctids: vec![],
             editable,
-            primary_keys,
+            primary_keys: primary_keys.clone(),
+            can_select,
+            can_insert,
+            can_update,
+            can_delete,
         });
     }
     let (columns, column_types, data) = rows_to_json(&rows);
@@ -543,6 +583,10 @@ pub async fn op_get_table_data(
         ctids: vec![String::new(); n],
         editable,
         primary_keys,
+        can_select,
+        can_insert,
+        can_update,
+        can_delete,
     })
 }
 
@@ -788,7 +832,7 @@ pub async fn op_get_er_model(state: &DbState, connection_id: &str) -> Result<ErM
         let name: String = r.get(1);
         let kind: String = r.get(2);
         let rows_estimate: i64 = r.get(3);
-        let size_pretty: String = r.get(4);
+        let size_pretty: String = r.get::<_, Option<String>>(4).unwrap_or_else(|| "—".to_string());
         let columns = cols_by_table.remove(&(schema.clone(), name.clone())).unwrap_or_default();
         tables.push(ErTable { schema, name, kind, rows_estimate, size_pretty, columns });
     }
@@ -831,4 +875,378 @@ pub async fn op_get_er_model(state: &DbState, connection_id: &str) -> Result<ErM
         .collect();
 
     Ok(ErModel { tables, relations })
+}
+
+// ── privileges: up-front gating so the UI disables what the user may not do ──
+
+async fn fetch_whoami(client: &Client) -> Result<(String, bool), String> {
+    let row = client
+        .query_one(
+            "SELECT current_user, COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false)",
+            &[],
+        )
+        .await
+        .map_err(pg_err)?;
+    Ok((row.get(0), row.get(1)))
+}
+
+pub async fn op_get_table_privileges(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TablePrivileges, String> {
+    if schema.is_empty() || table.is_empty() {
+        return Err("schema and table are required".to_string());
+    }
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    // Existence check first so has_table_privilege never errors on a missing rel.
+    fetch_relkind(&client, schema, table).await?;
+    let (current_user, is_superuser) = fetch_whoami(&client).await?;
+
+    let priv_row = client
+        .query_one(
+            "SELECT has_table_privilege(format('%I.%I', $1::text, $2::text), 'SELECT'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'INSERT'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'UPDATE'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'DELETE'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'TRUNCATE'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'REFERENCES'),
+                    has_table_privilege(format('%I.%I', $1::text, $2::text), 'TRIGGER')",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    let (select, insert, update, delete, truncate, references, trigger): (bool, bool, bool, bool, bool, bool, bool) = (
+        priv_row.get(0),
+        priv_row.get(1),
+        priv_row.get(2),
+        priv_row.get(3),
+        priv_row.get(4),
+        priv_row.get(5),
+        priv_row.get(6),
+    );
+
+    // Ownership via role membership (covers direct owner + member of owning role).
+    let owner_row = client
+        .query_one(
+            "SELECT c.relowner::regrole::text, pg_has_role(current_user, c.relowner, 'MEMBER')
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relname = $2",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    let owner_name: String = owner_row.get(0);
+    let is_member: bool = owner_row.get(1);
+    let is_owner = is_member || owner_name == current_user;
+    let can_alter = is_owner || is_superuser;
+    Ok(TablePrivileges {
+        current_user,
+        is_superuser,
+        is_owner,
+        select,
+        insert,
+        update,
+        delete,
+        truncate,
+        references,
+        trigger,
+        can_alter,
+        can_drop: can_alter,
+    })
+}
+
+pub async fn op_get_schema_privileges(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+) -> Result<SchemaPrivileges, String> {
+    if schema.is_empty() {
+        return Err("schema is required".to_string());
+    }
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    let (current_user, is_superuser) = fetch_whoami(&client).await?;
+    let priv_row = client
+        .query_one(
+            "SELECT has_schema_privilege($1, 'USAGE'), has_schema_privilege($1, 'CREATE')",
+            &[&schema],
+        )
+        .await
+        .map_err(pg_err)?;
+    let usage: bool = priv_row.get(0);
+    let create: bool = priv_row.get(1);
+    let owner_row = client
+        .query_opt(
+            "SELECT nspowner::regrole::text, pg_has_role(current_user, nspowner, 'MEMBER')
+             FROM pg_namespace WHERE nspname = $1",
+            &[&schema],
+        )
+        .await
+        .map_err(pg_err)?;
+    let (is_owner, owner_name) = match owner_row {
+        Some(r) => {
+            let owner: String = r.get(0);
+            let member: bool = r.get(1);
+            (member || owner == current_user, owner)
+        }
+        None => (false, String::new()),
+    };
+    let _ = owner_name;
+    Ok(SchemaPrivileges {
+        current_user,
+        is_superuser,
+        is_owner,
+        usage,
+        create,
+    })
+}
+
+// ── DDL: structure editing + table creation ──────────────────────
+// Identifiers are always quoted via quote_ident. Type names and DEFAULT
+// expressions are raw SQL fragments: they are validated to block statement
+// chaining (`;`, NUL) — the Query tab already lets a privileged user run
+// arbitrary SQL, so this is a guardrail against accidents, not a privilege
+// boundary.
+
+fn validate_column_type(t: &str) -> Result<String, String> {
+    let trimmed = t.trim();
+    if trimmed.is_empty() {
+        return Err("column type is required".to_string());
+    }
+    if trimmed.len() > 100 {
+        return Err("column type too long".to_string());
+    }
+    if trimmed.contains('\0') || trimmed.contains(';') {
+        return Err(format!("unsafe column type: {t}"));
+    }
+    if trimmed.contains("--") || trimmed.contains("/*") {
+        return Err(format!("unsafe column type: {t}"));
+    }
+    if trimmed.contains('\'') {
+        return Err(format!("unsafe column type: {t}"));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_alphanumeric() || " _(),.[]\"".contains(c))
+    {
+        return Err(format!("unsafe column type: {t}"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_default_expr(d: &str) -> Result<String, String> {
+    let trimmed = d.trim();
+    if trimmed.is_empty() {
+        return Err("default expression is empty".to_string());
+    }
+    if trimmed.len() > 1000 {
+        return Err("default expression too long".to_string());
+    }
+    if trimmed.contains('\0') || trimmed.contains(';') {
+        return Err("unsafe default expression (statement chaining is not allowed)".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_table_name(t: &str) -> Result<(), String> {
+    if t.trim().is_empty() {
+        return Err("table name is required".to_string());
+    }
+    if t.len() > 63 {
+        return Err("table name too long (max 63 chars)".to_string());
+    }
+    // Reuse identifier quoting as validation (rejects NUL / empty).
+    quote_ident(t.trim()).map(|_| ())
+}
+
+fn column_sql(col: &NewColumnDef, inline_pk: bool) -> Result<String, String> {
+    let qc = quote_ident(col.name.trim())?;
+    if col.name.trim().is_empty() {
+        return Err("column name is required".to_string());
+    }
+    let ty = validate_column_type(&col.data_type)?;
+    let mut s = format!("{qc} {ty}");
+    if !col.is_nullable {
+        s.push_str(" NOT NULL");
+    }
+    if let Some(d) = col.default_value.as_deref() {
+        let t = d.trim();
+        if !t.is_empty() {
+            s.push_str(&format!(" DEFAULT {}", validate_default_expr(t)?));
+        }
+    }
+    if inline_pk && col.is_primary {
+        s.push_str(" PRIMARY KEY");
+    }
+    Ok(s)
+}
+
+pub async fn op_create_table(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    columns: Vec<NewColumnDef>,
+) -> Result<u64, String> {
+    validate_table_name(table)?;
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table.trim())?;
+    if columns.is_empty() {
+        return Err("at least one column is required".to_string());
+    }
+    if columns.len() > 100 {
+        return Err("too many columns (max 100)".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for c in &columns {
+        let n = c.name.trim();
+        if n.is_empty() {
+            return Err("column name is required".to_string());
+        }
+        if !seen.insert(n.to_lowercase()) {
+            return Err(format!("duplicate column name: {n}"));
+        }
+    }
+    let pk_cols: Vec<String> = columns
+        .iter()
+        .filter(|c| c.is_primary)
+        .map(|c| quote_ident(c.name.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Inline single-column PK, table constraint otherwise (avoids duplicate syntax).
+    let inline_pk = pk_cols.len() == 1;
+    let mut defs = Vec::with_capacity(columns.len() + 1);
+    for c in &columns {
+        defs.push(column_sql(c, inline_pk)?);
+    }
+    if pk_cols.len() > 1 {
+        defs.push(format!("PRIMARY KEY ({})", pk_cols.join(", ")));
+    }
+    let sql = format!("CREATE TABLE {qs}.{qt} ({})", defs.join(", "));
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_drop_table(state: &DbState, connection_id: &str, schema: &str, table: &str) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let sql = format!("DROP TABLE {qs}.{qt}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_add_column(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    column: NewColumnDef,
+) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let def = column_sql(&column, column.is_primary)?;
+    let sql = format!("ALTER TABLE {qs}.{qt} ADD COLUMN {def}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_drop_column(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    column: &str,
+) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let qc = quote_ident(column)?;
+    let sql = format!("ALTER TABLE {qs}.{qt} DROP COLUMN {qc}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_rename_column(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<u64, String> {
+    if new_name.trim().is_empty() {
+        return Err("new column name is required".to_string());
+    }
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let qo = quote_ident(old_name)?;
+    let qn = quote_ident(new_name.trim())?;
+    let sql = format!("ALTER TABLE {qs}.{qt} RENAME COLUMN {qo} TO {qn}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_alter_column_type(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    column: &str,
+    new_type: &str,
+) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let qc = quote_ident(column)?;
+    let ty = validate_column_type(new_type)?;
+    let sql = format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} TYPE {ty} USING {qc}::{ty}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_set_column_nullable(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    column: &str,
+    nullable: bool,
+) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let qc = quote_ident(column)?;
+    let action = if nullable { "DROP NOT NULL" } else { "SET NOT NULL" };
+    let sql = format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} {action}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+}
+
+pub async fn op_set_column_default(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    column: &str,
+    default_value: Option<String>,
+) -> Result<u64, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let qc = quote_ident(column)?;
+    let sql = match default_value.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(expr) => {
+            let valid = validate_default_expr(expr)?;
+            format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} SET DEFAULT {valid}")
+        }
+        None => format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} DROP DEFAULT"),
+    };
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
 }

@@ -67,12 +67,31 @@ export default function App() {
       setSchemas(s);
       const map: Record<string, TableEntry[]> = {};
       for (const entry of s) {
-        map[entry.name] = await listTables(entry.name);
+        // No USAGE on the schema → listing its tables would raise
+        // "permission denied" afterwards. Show an empty group instead.
+        if (!entry.can_usage) {
+          map[entry.name] = [];
+          continue;
+        }
+        try {
+          map[entry.name] = await listTables(entry.name);
+        } catch (e) {
+          // Per-schema failure (e.g. revoked mid-session) must not wipe
+          // the whole tree — keep other schemas browsable.
+          console.warn(`listTables(${entry.name}) failed`, e);
+          map[entry.name] = [];
+        }
       }
       setTablesBySchema(map);
-      if (!schema && map["public"]?.[0]) {
-        setSchema("public");
-        setTable(map["public"][0].name);
+      if (!schema) {
+        const firstSelectable = map["public"]?.find((t) => t.can_select) ?? Object.values(map).flat().find((t) => t.can_select);
+        if (firstSelectable) {
+          setSchema(firstSelectable.schema);
+          setTable(firstSelectable.name);
+        } else if (map["public"]?.[0]) {
+          setSchema("public");
+          setTable(map["public"][0].name);
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -106,6 +125,11 @@ export default function App() {
 
   async function handleSwitchDatabase(db: string) {
     if (!active || db === currentDb) return;
+    const target = databases.find((d) => d.name === db);
+    if (target && !target.can_connect) {
+      setError(`Missing CONNECT privilege on database "${db}" — switching is disabled for the current user.`);
+      return;
+    }
     setSwitchingDb(true);
     setError(null);
     try {
@@ -226,7 +250,19 @@ export default function App() {
 
             <div className="flex min-h-0 flex-1 overflow-hidden">
               {tab === "data" && <TableDataView schema={schema} table={table} />}
-              {tab === "structure" && <StructureView schema={schema} table={table} />}
+              {tab === "structure" && (
+                <StructureView
+                  schema={schema}
+                  table={table}
+                  tableKind={schema && table ? tablesBySchema[schema]?.find((t) => t.name === table)?.kind : undefined}
+                  onRefreshTables={refreshTree}
+                  onTableDropped={() => {
+                    setSchema(null);
+                    setTable(null);
+                    setTab("data");
+                  }}
+                />
+              )}
               {tab === "er" && <ErDiagramView key={currentDb ?? "none"} connected={connected} />}
               {/* Keep the query editor mounted while hidden so selecting another
                   table (which hops to the Data tab) never wipes its state. */}

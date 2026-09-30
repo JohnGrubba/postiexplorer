@@ -21,6 +21,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { getErModel, isTauri } from "../lib/api";
+import { downloadTextFile } from "../lib/download";
 import type { ColumnEntry, ErDetailOptions, ErModel, ErRelation, ErTable } from "../types";
 
 // ── constants ──────────────────────────────────────────────────
@@ -1408,7 +1409,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
   }, [view, edges, highlight, hoveredRel, culled, labelAllEdges, opts, canvasSize, drawEdgesCanvas]);
 
   // ── export ──
-  function exportSvg() {
+  async function exportSvg() {
     if (filtered.length === 0) return;
     let minX = Infinity,
       minY = Infinity,
@@ -1422,6 +1423,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       maxX = Math.max(maxX, p.x + NODE_W);
       maxY = Math.max(maxY, p.y + (tableHeights.get(tkey(t.schema, t.name)) ?? heightOf(t, opts, relatedCols)));
     }
+    if (!isFinite(minX) || !isFinite(minY)) return;
     const W = maxX - minX + 80;
     const H = maxY - minY + 80;
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1450,12 +1452,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       s += `</g>`;
     }
     s += `</svg>`;
-    const blob = new Blob([s], { type: "image/svg+xml" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "er-diagram.svg";
-    a.click();
-    URL.revokeObjectURL(a.href);
+    await downloadTextFile("er-diagram.svg", s, "image/svg+xml;charset=utf-8");
   }
 
   async function copyMermaid() {

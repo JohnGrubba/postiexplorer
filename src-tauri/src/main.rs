@@ -115,9 +115,121 @@ async fn get_er_model(state: tauri::State<'_, DbState>, connection_id: String) -
     db::op_get_er_model(&state, &connection_id).await
 }
 
+#[tauri::command]
+async fn get_table_privileges(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+) -> Result<TablePrivileges, String> {
+    db::op_get_table_privileges(&state, &connection_id, &schema, &table).await
+}
+
+#[tauri::command]
+async fn get_schema_privileges(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+) -> Result<SchemaPrivileges, String> {
+    db::op_get_schema_privileges(&state, &connection_id, &schema).await
+}
+
+#[tauri::command]
+async fn create_table(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    columns: Vec<NewColumnDef>,
+) -> Result<u64, String> {
+    db::op_create_table(&state, &connection_id, &schema, &table, columns).await
+}
+
+#[tauri::command]
+async fn drop_table(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+) -> Result<u64, String> {
+    db::op_drop_table(&state, &connection_id, &schema, &table).await
+}
+
+#[tauri::command]
+async fn add_column(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    column: NewColumnDef,
+) -> Result<u64, String> {
+    db::op_add_column(&state, &connection_id, &schema, &table, column).await
+}
+
+#[tauri::command]
+async fn drop_column(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    column: String,
+) -> Result<u64, String> {
+    db::op_drop_column(&state, &connection_id, &schema, &table, &column).await
+}
+
+#[tauri::command]
+async fn rename_column(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    old_name: String,
+    new_name: String,
+) -> Result<u64, String> {
+    db::op_rename_column(&state, &connection_id, &schema, &table, &old_name, &new_name).await
+}
+
+#[tauri::command]
+async fn alter_column_type(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    column: String,
+    new_type: String,
+) -> Result<u64, String> {
+    db::op_alter_column_type(&state, &connection_id, &schema, &table, &column, &new_type).await
+}
+
+#[tauri::command]
+async fn set_column_nullable(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    column: String,
+    nullable: bool,
+) -> Result<u64, String> {
+    db::op_set_column_nullable(&state, &connection_id, &schema, &table, &column, nullable).await
+}
+
+#[tauri::command]
+async fn set_column_default(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    column: String,
+    default_value: Option<String>,
+) -> Result<u64, String> {
+    db::op_set_column_default(&state, &connection_id, &schema, &table, &column, default_value).await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(DbState::default())
         .invoke_handler(tauri::generate_handler![
             test_connection,
@@ -133,7 +245,17 @@ fn main() {
             update_row,
             delete_rows,
             get_server_info,
-            get_er_model
+            get_er_model,
+            get_table_privileges,
+            get_schema_privileges,
+            create_table,
+            drop_table,
+            add_column,
+            drop_column,
+            rename_column,
+            alter_column_type,
+            set_column_nullable,
+            set_column_default
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
