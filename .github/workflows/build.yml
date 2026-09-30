@@ -9,6 +9,11 @@
 # Live-DB verification: the ubuntu job starts postgres:16 as a service,
 # seeds demo_db with seed.sql and runs the Rust integration tests
 # (src-tauri/tests/live_db.rs) before building.
+#
+# Speed: npm deps are cached via setup-node (`cache: npm`) and the Cargo
+# registry + src-tauri/target via Swatinem/rust-cache in every build job —
+# the first run per runner is slow (cold cache), follow-ups only rebuild
+# what changed.
 
 name: build
 
@@ -89,6 +94,13 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Caches the Cargo registry + src-tauri/target across runs.
+          # First run stays slow (cold cache); follow-ups reuse compiled
+          # dependencies and only rebuild what changed.
+          workspaces: src-tauri
+
       - run: npm ci
       - run: npx tsc --noEmit
 
@@ -124,6 +136,12 @@ jobs:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Caches the Cargo registry + src-tauri/target across runs.
+          # First run stays slow (cold cache); follow-ups reuse compiled
+          # dependencies and only rebuild what changed.
+          workspaces: src-tauri
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run dist -- --bundles nsis
@@ -147,6 +165,12 @@ jobs:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Caches the Cargo registry + src-tauri/target across runs.
+          # First run stays slow (cold cache); follow-ups reuse compiled
+          # dependencies and only rebuild what changed.
+          workspaces: src-tauri
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run dist -- --bundles nsis
@@ -169,6 +193,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Caches the Cargo registry + src-tauri/target across runs.
+          # First run stays slow (cold cache); follow-ups reuse compiled
+          # dependencies and only rebuild what changed.
+          workspaces: src-tauri
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm run dist -- --bundles dmg

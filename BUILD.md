@@ -88,6 +88,13 @@ before building. Every push to `main` updates the rolling `latest`
 GitHub Release with everything in `releases/` (artifacts are also kept per run).
 No manual tags needed.
 
+Build caching: npm deps (`setup-node` → `cache: npm`) and the Cargo
+registry + `src-tauri/target` (`Swatinem/rust-cache`) persist across runs —
+the first build per runner is slow (cold cache, ~15–25 min for the Rust
+release profile), follow-ups only recompile what changed (typically a few
+minutes). Caches are keyed per OS/arch, so the four jobs don't clobber
+each other.
+
 ```yaml
 # sketch of the matrix
 strategy: # (see file for full definition)
