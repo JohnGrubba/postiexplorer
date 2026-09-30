@@ -3,7 +3,8 @@
  * package.json. Everything else follows it:
  *
  *   package.json ──reads──> src-tauri/tauri.conf.json  (`version`)
- *                └─reads──> src-tauri/Cargo.toml       (`[package] version`)
+ *                ├─reads──> src-tauri/Cargo.toml       (`[package] version`)
+ *                └─reads──> README.md                  (download asset names)
  *
  * The frontend gets the same version at build time via `__APP_VERSION__`
  * (see vite.config.ts). Tauri derives installer/bundle file names from
@@ -78,10 +79,21 @@ for (let i = 0; i < lines.length; i++) {
 if (!cargoFound) fail("no `version = ...` found under [package] in src-tauri/Cargo.toml");
 const cargoOut = lines.join("\n");
 
+// ── README.md download links (PostiExplorer_<version>_… asset names) ──
+const readmePath = join(ROOT, "README.md");
+const readmeRaw = readFileSync(readmePath, "utf8");
+const readmeHits = [...readmeRaw.matchAll(/PostiExplorer_(\d+\.\d+\.\d+)/g)];
+const readmeDrift = readmeHits.some((m) => m[1] !== version);
+const readmeOut = readmeRaw.replace(/PostiExplorer_\d+\.\d+\.\d+/g, `PostiExplorer_${version}`);
+
 if (CHECK) {
   const problems = [];
   if (confDrift) problems.push(`tauri.conf.json is ${JSON.stringify(confOld)}`);
   if (cargoDrift) problems.push("Cargo.toml [package] version differs");
+  if (readmeDrift)
+    problems.push(
+      `README.md download links point at ${[...new Set(readmeHits.map((m) => m[1]))].filter((v) => v !== version).join(", ")}`,
+    );
   if (problems.length > 0) {
     fail(`version drift detected (package.json says ${version}):\n  - ${problems.join("\n  - ")}\nRun \`npm run sync-version\` to fix.`);
   }
@@ -97,6 +109,10 @@ if (confOut !== confRaw) {
 if (cargoOut !== cargoRaw) {
   writeFileSync(cargoPath, cargoOut);
   touched.push("src-tauri/Cargo.toml");
+}
+if (readmeOut !== readmeRaw) {
+  writeFileSync(readmePath, readmeOut);
+  touched.push("README.md");
 }
 console.log(
   touched.length > 0

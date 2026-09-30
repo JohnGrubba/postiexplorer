@@ -3,7 +3,7 @@
 # Release tagged `latest` on every push to main — no manual tags needed).
 #
 # Path-filtered (see `on.push/pull_request.paths`): docs, screenshots and
-# other non-build files don't trigger the three runners. Use "Run workflow"
+# other non-build files don't trigger the runners. Use "Run workflow"
 # (workflow_dispatch) to force a build anyway.
 #
 # Live-DB verification: the ubuntu job starts postgres:16 as a service,
@@ -115,7 +115,7 @@ jobs:
           path: releases/
 
   # ── Windows x64 ──
-  build-windows:
+  build-windows-x64:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +129,32 @@ jobs:
       - run: npm run dist -- --bundles nsis
       - uses: actions/upload-artifact@v4
         with:
-          name: postiexplorer-windows
+          name: postiexplorer-windows-x64
+          path: releases/
+
+  # ── Windows ARM64 (Snapdragon / Surface Pro X and newer) ──
+  # Runs natively on a windows-11-arm runner, so the Rust toolchain targets
+  # aarch64-pc-windows-msvc by default — no extra target setup needed.
+  # Installer-only: the raw portable binary is skipped (SKIP_PORTABLE=1)
+  # because it would collide with the x64 `postiexplorer.exe` asset name
+  # in the flat GitHub Release namespace.
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run dist -- --bundles nsis
+        env:
+          SKIP_PORTABLE: "1"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: postiexplorer-windows-arm64
           path: releases/
 
   # ── macOS arm64 (M1+, macos-latest) ──
@@ -155,7 +180,7 @@ jobs:
   # ── Publish installers as a rolling GitHub Release on every push to main ──
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows-x64, build-windows-arm64, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -12,17 +12,23 @@
 
 ## Download
 
-Grab the latest installer from
-[**GitHub Releases**](https://github.com/JohnGrubba/postiexplorer/releases):
+## Download
 
-| OS      | File                                             |
-| ------- | ------------------------------------------------ |
-| Windows | `PostiExplorer_*_x64-setup.exe` (installer) or `postiexplorer.exe` (portable) |
-| Linux   | `*.AppImage` (`chmod +x` to run), `.deb` / `.rpm` |
-| macOS   | `*.dmg`                                          |
+Direct downloads from the rolling
+[`latest` release](https://github.com/JohnGrubba/postiexplorer/releases/latest)
+(rebuilt by [CI](.github/workflows/build.yml) on every push to `main`):
 
-Releases are built automatically by [CI](.github/workflows/build.yml) on every
-push to `main` (rolling `latest` release — no tags needed). Or build locally — see [BUILD.md](BUILD.md).
+| OS | Recommended | Alternative |
+| -- | ----------- | ----------- |
+| Windows x64 | [Installer (`PostiExplorer_0.1.1_x64-setup.exe`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_x64-setup.exe) | [Portable `postiexplorer.exe`](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/postiexplorer.exe) |
+| Windows ARM64 | [Installer (`PostiExplorer_0.1.1_aarch64-setup.exe`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_aarch64-setup.exe) | — |
+| Linux (x64) | [AppImage (`PostiExplorer_0.1.1_amd64.AppImage`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_amd64.AppImage) — `chmod +x` to run | [`.deb` (`PostiExplorer_0.1.1_amd64.deb`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_amd64.deb) |
+| macOS (Apple Silicon) | [`PostiExplorer_0.1.1_aarch64.dmg`](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_aarch64.dmg) | — |
+
+See the [full file list](https://github.com/JohnGrubba/postiexplorer/releases/latest)
+for everything else. The versions in these links track `package.json`
+automatically — see [BUILD.md §8](BUILD.md#8-versioning-single-source-of-truth).
+Or build locally — see [BUILD.md](BUILD.md).
 
 ## Screenshots
 

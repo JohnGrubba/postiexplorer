@@ -3,6 +3,8 @@
  *
  *   npm run dist                build for the current OS, collect bundles into ./releases/
  *   npm run dist -- --bundles nsis|appimage|dmg ...
+ *   SKIP_PORTABLE=1 npm run dist   skip collecting the raw portable binary
+ *                                 (CI: avoids asset-name collisions between arch jobs)
  *
  * Why not `./dist`? That folder is Vite's frontend output (and Tauri's
  * `frontendDist`). Overwriting it would break `tauri build`. All finished
@@ -69,9 +71,12 @@ n += collect("rpm", "linux");
 n += collect("dmg", "macos");
 
 // Raw portable binary (single file, no installer).
+// Skipped with SKIP_PORTABLE=1 — used by CI jobs whose binary name would
+// collide with another job's asset in the flat GitHub Release namespace
+// (e.g. Windows ARM64 vs x64 `postiexplorer.exe`).
 const binName = process.platform === "win32" ? "postiexplorer.exe" : "postiexplorer";
 const binSrc = join(ROOT, "src-tauri", "target", "release", binName);
-if (existsSync(binSrc)) {
+if (!process.env.SKIP_PORTABLE && existsSync(binSrc)) {
   const dest = join(OUT, "portable");
   mkdirSync(dest, { recursive: true });
   cpSync(binSrc, join(dest, binName));

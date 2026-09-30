@@ -55,7 +55,8 @@ is not supported; build on each OS (or CI, see §5).
 
 ```
 releases/
-  windows/PostiExplorer_<version>_x64-setup.exe   ← installer (single .exe)
+  windows/PostiExplorer_<version>_x64-setup.exe      ← installer, x64 (single .exe)
+  windows/PostiExplorer_<version>_aarch64-setup.exe  ← installer, ARM64
   windows/*.msi
   linux/*.AppImage                             ← single file, chmod +x to run
   linux/*.deb  linux/*.rpm
@@ -80,7 +81,7 @@ Bundle metadata (name, identifier, icons, category) lives in
 
 ## 5. CI (build all three OSes)
 
-`.github/workflows/build.yml` builds Windows (x64), Linux (x64) and macOS
+`.github/workflows/build.yml` builds Windows x64 + ARM64, Linux (x64) and macOS
 (arm64) on every push/PR. The Linux job additionally seeds a real
 `postgres:16` service with `seed.sql` and runs `cargo test --test live_db`
 before building. Every push to `main` updates the rolling `latest`
@@ -90,7 +91,8 @@ No manual tags needed.
 ```yaml
 # sketch of the matrix
 strategy: # (see file for full definition)
-# windows-latest → npm run dist -- --bundles nsis
+# windows-latest → npm run dist -- --bundles nsis   (x64 installer + portable)
+# windows-11-arm → npm run dist -- --bundles nsis   (ARM64 installer only, SKIP_PORTABLE=1)
 # ubuntu-22.04   → live-DB tests + npm run dist
 # macos-latest   → npm run dist -- --bundles dmg
 ```
@@ -143,6 +145,7 @@ What follows automatically on every `npm run build` / `npm run dist` /
 | `src-tauri/tauri.conf.json` → `version` | = package.json |
 | `src-tauri/Cargo.toml` → `[package] version` | = package.json |
 | Installer/bundle file names (`PostiExplorer_<version>_…`) | derived by Tauri |
+| README.md download links | rewritten to match |
 | Header + status bar in the app UI | baked in at build time (`__APP_VERSION__`, see `vite.config.ts`) |
 | `src-tauri/Cargo.lock` (`postiexplorer` entry) | refreshed by cargo itself on the next build |
 
