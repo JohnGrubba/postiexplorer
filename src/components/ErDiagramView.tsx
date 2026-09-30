@@ -38,6 +38,10 @@ const EMPTY_COLS_PLACEHOLDER_H = 30;
 // hides far off-screen DOM.
 const CULL_MARGIN = 600;
 const EMPTY_SET: Set<string> = new Set();
+// Screenspace hit tolerance (px) for edge hover / click detection on canvas.
+const EDGE_HIT_PX = 10;
+// Throttle for committing pan position to React state (culling) mid-gesture.
+const PAN_COMMIT_MS = 150;
 
 /** Fire-and-forget clipboard copy with textarea fallback. Returns true on best-effort success. */
 async function copyText(text: string): Promise<boolean> {
@@ -59,6 +63,111 @@ async function copyText(text: string): Promise<boolean> {
       return false;
     }
   }
+}
+
+/** Geometry for one relation edge, including bezier controls for canvas/SVG. */
+type EdgeGeom = {
+  r: ErRelation;
+  i: number;
+  d: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  c1x: number;
+  c1y: number;
+  c2x: number;
+  c2y: number;
+  midX: number;
+  midY: number;
+  sk: string;
+  tk: string;
+};
+
+/**
+ * Pure edge geometry builder (no React). Shared by the canvas renderer and
+ * the SVG exporter so both stay in sync. Column lookups are O(1) via
+ * `colIndex`/`colCount` instead of findIndex per edge per frame.
+ */
+function buildEdgeGeom(
+  visibleRelations: ErRelation[],
+  positions: Record<string, Pos>,
+  colIndex: Map<string, Map<string, number>>,
+  colCount: Map<string, number>,
+  opts: ErDetailOptions,
+): (EdgeGeom | null)[] {
+  const pairCount = new Map<string, number>();
+  const header = opts.showRowCounts ? HEADER_H_WITH_META : HEADER_H_SLIM;
+  const rh = rowHeight(opts);
+  return visibleRelations.map((r, i) => {
+    const sk = tkey(r.source_schema, r.source_table);
+    const tk = tkey(r.target_schema, r.target_table);
+    const sp = positions[sk];
+    const tp = positions[tk];
+    if (!sp || !tp) return null;
+    const sIdx = colIndex.get(sk)?.get(r.source_column) ?? 0;
+    const tIdx = sk === tk ? sIdx : (colIndex.get(tk)?.get(r.target_column) ?? 0);
+    const sCount = Math.max(1, colCount.get(sk) ?? 1);
+    const tCount = Math.max(1, colCount.get(tk) ?? 1);
+    const y1 = sp.y + header + Math.min(sIdx, sCount - 1) * rh + rh / 2;
+    const y2 = tp.y + header + Math.min(tIdx, tCount - 1) * rh + rh / 2;
+    const pairKey = sk < tk ? `${sk}|${tk}|${r.source_column}|${r.target_column}` : `${tk}|${sk}|${r.target_column}|${r.source_column}`;
+    const n = pairCount.get(pairKey) ?? 0;
+    pairCount.set(pairKey, n + 1);
+    const lane = n * 9;
+
+    if (sk === tk) {
+      const x = sp.x + NODE_W;
+      const loopW = 46 + n * 10;
+      const my1 = y1 + lane;
+      const my2 = y2 + lane;
+      const spread = Math.max(28, Math.abs(my2 - my1));
+      const endY = my2 + (my2 === my1 ? spread : 0);
+      const d = `M ${x} ${my1} C ${x + loopW} ${my1}, ${x + loopW} ${endY}, ${x} ${endY}`;
+      return { r, i, d, x1: x, y1: my1, x2: x, y2: endY, c1x: x + loopW, c1y: my1, c2x: x + loopW, c2y: endY, midX: x + loopW - 6, midY: (my1 + endY) / 2, sk, tk };
+    }
+
+    const sourceLeft = sp.x + NODE_W / 2 > tp.x + NODE_W / 2;
+    const x1 = sourceLeft ? sp.x : sp.x + NODE_W;
+    const x2 = sourceLeft ? tp.x + NODE_W : tp.x;
+    const dir1 = sourceLeft ? -1 : 1;
+    const dir2 = sourceLeft ? 1 : -1;
+    const dx = Math.max(48, Math.abs(x2 - x1) / 2);
+    const my1 = y1 + lane;
+    const my2 = y2 + lane;
+    const c1x = x1 + dir1 * dx;
+    const c1y = my1;
+    const c2x = x2 + dir2 * dx;
+    const c2y = my2;
+    const d = `M ${x1} ${my1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${my2}`;
+    return { r, i, d, x1, y1: my1, x2, y2: my2, c1x, c1y, c2x, c2y, midX: (x1 + x2) / 2, midY: (my1 + my2) / 2, sk, tk };
+  });
+}
+
+/** Point on a cubic bezier at t (world units). */
+function cubicAt(
+  x0: number, y0: number, x1: number, y1: number,
+  x2: number, y2: number, x3: number, y3: number, t: number,
+): { x: number; y: number } {
+  const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
+  return { x: a * x0 + b * x1 + c * x2 + d * x3, y: a * y0 + b * y1 + c * y2 + d * y3 };
+}
+
+/** Min distance² from point to edge curve (12 samples — cheap hit test). */
+function edgeDistSq(e: EdgeGeom, wx: number, wy: number): number {
+  let best = Infinity;
+  for (let s = 0; s <= 12; s++) {
+    const p = cubicAt(e.x1, e.y1, e.c1x, e.c1y, e.c2x, e.c2y, e.x2, e.y2, s / 12);
+    const dx = p.x - wx;
+    const dy = p.y - wy;
+    const q = dx * dx + dy * dy;
+    if (q < best) best = q;
+  }
+  return best;
 }
 
 const SCHEMA_PALETTE = ["#22d3ee", "#8b5cf6", "#f59e0b", "#34d399", "#fb7185", "#60a5fa", "#facc15", "#2dd4bf"];
@@ -488,6 +597,7 @@ const ErNode = memo(function ErNode({
   onSelect,
   onCopy,
   onShowAll,
+  registerNodeEl,
 }: {
   table: ErTable;
   tableKey: string;
@@ -506,6 +616,7 @@ const ErNode = memo(function ErNode({
   onSelect: (key: string) => void;
   onCopy: (text: string, key: string) => void;
   onShowAll: () => void;
+  registerNodeEl: (key: string, el: HTMLDivElement | null) => void;
 }) {
   const rh = rowHeight(opts);
   const isView = table.kind !== "table";
@@ -514,7 +625,8 @@ const ErNode = memo(function ErNode({
   return (
     <div
       className={`absolute left-0 top-0 ${isDimmed ? "opacity-30 saturate-50" : ""}`}
-      style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, width: NODE_W, willChange: "transform" }}
+      style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, width: NODE_W, pointerEvents: "auto" }}
+      ref={(el) => registerNodeEl(tableKey, el)}
       onMouseDown={(e) => onNodeMouseDown(e, tableKey)}
       onMouseEnter={() => onHover(tableKey)}
       onMouseLeave={() => onHover(null)}
@@ -663,6 +775,9 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
+  const edgesCanvasRef = useRef<HTMLCanvasElement>(null);
+  const nodeElsRef = useRef(new Map<string, HTMLDivElement>());
   const dragRef = useRef<null | (
     | { kind: "pan"; startX: number; startY: number; origX: number; origY: number }
     | { kind: "node"; key: string; offsetX: number; offsetY: number }
@@ -671,17 +786,169 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
   // Used to suppress click-to-copy after dragging a node / panning.
   const movedRef = useRef(false);
   const downAtRef = useRef({ x: 0, y: 0 });
-  // rAF-throttled pending updates so mousemove (which can fire >120Hz)
-  // collapses to at most one React render per frame.
-  const panRafRef = useRef<number | null>(null);
-  const nodeRafRef = useRef<number | null>(null);
-  const pendingViewRef = useRef<{ x: number; y: number; k: number } | null>(null);
-  const pendingPosRef = useRef<{ key: string; x: number; y: number } | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Live (uncommitted) camera + layout. Mutated directly during a gesture for
+  // GPU-composited updates with zero React renders; committed to state on drop.
   const viewRef = useRef(view);
-  viewRef.current = view;
   const positionsRef = useRef(positions);
-  positionsRef.current = positions;
+  // Mirrors for the canvas painter (stable callbacks read these, never state).
+  const relationsRef = useRef<ErRelation[]>([]);
+  const colIndexRef = useRef(new Map<string, Map<string, number>>());
+  const colCountRef = useRef(new Map<string, number>());
+  const optsRef = useRef(opts);
+  const highlightRef = useRef<{ tables: Set<string>; rels: Set<number> } | null>(null);
+  const hoveredRelRef = useRef<number | null>(null);
+  const culledKeysRef = useRef(new Set<string>());
+  const labelAllRef = useRef(true);
+  const geomLiveRef = useRef<(EdgeGeom | null)[]>([]);
+  const edgeRafRef = useRef<number | null>(null);
+  const hoverRafRef = useRef<number | null>(null);
+  const lastPanCommitRef = useRef(0);
+
+  const registerNodeEl = useCallback((key: string, el: HTMLDivElement | null) => {
+    if (el) nodeElsRef.current.set(key, el);
+    else nodeElsRef.current.delete(key);
+  }, []);
+
+  /** Write camera transform straight to the compositor (no React render). */
+  const applyWorldTransformDirect = useCallback(() => {
+    const w = worldRef.current;
+    if (!w) return;
+    const v = viewRef.current;
+    w.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.k})`;
+  }, []);
+
+  /**
+   * GPU-composited edge layer. A single canvas redrawn at devicePixelRatio
+   * stays vector-crisp at any zoom (unlike a CSS-scaled bitmap) and costs one
+   * layer instead of hundreds of SVG nodes.
+   */
+  const drawEdgesCanvas = useCallback(() => {
+    const canvas = edgesCanvasRef.current;
+    const container = canvasRef.current;
+    if (!canvas || !container) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w < 2 || h < 2) return;
+    const bw = Math.round(w * dpr);
+    const bh = Math.round(h * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const v = viewRef.current;
+    const o = optsRef.current;
+    const geom = buildEdgeGeom(relationsRef.current, positionsRef.current, colIndexRef.current, colCountRef.current, o);
+    geomLiveRef.current = geom;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr * v.k, 0, 0, dpr * v.k, dpr * v.x, dpr * v.y);
+    ctx.lineCap = "round";
+    const hl = highlightRef.current;
+    const hov = hoveredRelRef.current;
+    const culled = culledKeysRef.current;
+    const useCull = culled.size > 0;
+    const showLabels = o.showRelationLabels && v.k > 0.45;
+    const labelAll = labelAllRef.current;
+    for (const e of geom) {
+      if (!e) continue;
+      if (useCull && !culled.has(e.sk) && !culled.has(e.tk)) continue;
+      const isActive = hov === e.i || (hl !== null && hl.rels.has(e.i));
+      const isDim = hl !== null && !hl.rels.has(e.i);
+      const baseAlpha = isDim ? 0.18 : 1;
+      ctx.beginPath();
+      ctx.moveTo(e.x1, e.y1);
+      ctx.bezierCurveTo(e.c1x, e.c1y, e.c2x, e.c2y, e.x2, e.y2);
+      ctx.strokeStyle = isActive ? "#22d3ee" : "#7c8aa5";
+      ctx.globalAlpha = baseAlpha * (isActive ? 0.95 : 0.55);
+      ctx.lineWidth = (isActive ? 2.2 : 1.5) / v.k;
+      if (hov === e.i) {
+        ctx.shadowColor = "rgba(34,211,238,0.8)";
+        ctx.shadowBlur = 8;
+      } else {
+        ctx.shadowBlur = 0;
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      // arrowhead along end tangent
+      const ang = Math.atan2(e.y2 - e.c2y, e.x2 - e.c2x);
+      const s = 7 / v.k;
+      ctx.globalAlpha = baseAlpha * 0.9;
+      ctx.fillStyle = isActive ? "#22d3ee" : "#64748b";
+      ctx.beginPath();
+      ctx.moveTo(e.x2, e.y2);
+      ctx.lineTo(e.x2 - s * Math.cos(ang - 0.42), e.y2 - s * Math.sin(ang - 0.42));
+      ctx.lineTo(e.x2 - s * Math.cos(ang + 0.42), e.y2 - s * Math.sin(ang + 0.42));
+      ctx.closePath();
+      ctx.fill();
+      // source dot
+      ctx.globalAlpha = baseAlpha;
+      ctx.fillStyle = isActive ? "#22d3ee" : "#7c8aa5";
+      ctx.beginPath();
+      ctx.arc(e.x1, e.y1, (isActive ? 4 : 3) / v.k, 0, Math.PI * 2);
+      ctx.fill();
+      if (showLabels && (labelAll || isActive)) {
+        const label = `${e.r.source_column} → ${e.r.target_column}`;
+        const fs = 9.5 / v.k;
+        ctx.font = `${fs}px "JetBrains Mono", monospace`;
+        const tw = ctx.measureText(label).width;
+        const pw = tw + 12 / v.k;
+        const ph = 18 / v.k;
+        const px = e.midX - pw / 2;
+        const py = e.midY - ph / 2;
+        ctx.globalAlpha = baseAlpha;
+        ctx.fillStyle = "rgba(13,20,36,0.92)";
+        ctx.strokeStyle = isActive ? "rgba(34,211,238,0.5)" : "rgba(148,163,184,0.25)";
+        ctx.lineWidth = 1 / v.k;
+        ctx.beginPath();
+        const rr = (ctx as CanvasRenderingContext2D & { roundRect?: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect;
+        if (typeof rr === "function") rr.call(ctx, px, py, pw, ph, 9 / v.k);
+        else ctx.rect(px, py, pw, ph);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = isActive ? "#a5f3fc" : "#94a3b8";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, e.midX, e.midY + 0.5 / v.k);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }, []);
+
+  const scheduleEdgeRedraw = useCallback(() => {
+    if (edgeRafRef.current != null) return;
+    edgeRafRef.current = requestAnimationFrame(() => {
+      edgeRafRef.current = null;
+      drawEdgesCanvas();
+    });
+  }, [drawEdgesCanvas]);
+
+  /** Nearest edge to a client point (or null). Reads the last painted geometry. */
+  const hitTestEdge = useCallback((clientX: number, clientY: number): number | null => {
+    const container = canvasRef.current;
+    if (!container) return null;
+    const rect = container.getBoundingClientRect();
+    const v = viewRef.current;
+    const wx = (clientX - rect.left - v.x) / v.k;
+    const wy = (clientY - rect.top - v.y) / v.k;
+    const tol = (EDGE_HIT_PX / v.k) * (EDGE_HIT_PX / v.k);
+    let best: number | null = null;
+    let bestD = tol;
+    for (const e of geomLiveRef.current) {
+      if (!e) continue;
+      const d = edgeDistSq(e, wx, wy);
+      if (d < bestD) {
+        bestD = d;
+        best = e.i;
+      }
+    }
+    return best;
+  }, []);
 
   // Track canvas pixel size for viewport culling.
   useEffect(() => {
@@ -698,35 +965,94 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     return () => ro.disconnect();
   }, []);
 
-  // End any in-progress drag on window mouse-up (pointer may leave canvas).
+  // ── gesture engine: direct compositor writes during drag, React commit on drop ──
+  // Mousemove updates viewRef/positionsRef + DOM transforms + canvas redraw at
+  // pointer rate with zero React renders. State commits only on mouseup (plus
+  // a throttled view commit mid-pan so viewport culling follows along).
   useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const d = dragRef.current;
+      const container = canvasRef.current;
+      if (!container) return;
+      if (d) {
+        if (!movedRef.current) {
+          const dx = e.clientX - downAtRef.current.x;
+          const dy = e.clientY - downAtRef.current.y;
+          if (dx * dx + dy * dy > 16) movedRef.current = true;
+        }
+        if (movedRef.current) {
+          const sel = window.getSelection();
+          if (sel && sel.toString().length > 0) sel.removeAllRanges();
+        }
+        if (d.kind === "pan") {
+          viewRef.current = { ...viewRef.current, x: d.origX + (e.clientX - d.startX), y: d.origY + (e.clientY - d.startY) };
+          applyWorldTransformDirect();
+          scheduleEdgeRedraw();
+          const now = performance.now();
+          if (now - lastPanCommitRef.current > PAN_COMMIT_MS) {
+            lastPanCommitRef.current = now;
+            setView({ ...viewRef.current });
+          }
+        } else {
+          const rect = container.getBoundingClientRect();
+          const v = viewRef.current;
+          const wx = (e.clientX - rect.left - v.x) / v.k;
+          const wy = (e.clientY - rect.top - v.y) / v.k;
+          const nx = Math.round(wx - d.offsetX);
+          const ny = Math.round(wy - d.offsetY);
+          const cur = positionsRef.current[d.key];
+          if (!cur || cur.x !== nx || cur.y !== ny) {
+            positionsRef.current[d.key] = { x: nx, y: ny };
+            const el = nodeElsRef.current.get(d.key);
+            if (el) el.style.transform = `translate(${nx}px, ${ny}px)`;
+            scheduleEdgeRedraw();
+          }
+        }
+        return;
+      }
+      // Idle edge hover via canvas geometry (rAF-throttled, state only on change).
+      if (e.buttons !== 0) return;
+      const rect = container.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+      if (hoverRafRef.current != null) return;
+      const cx = e.clientX;
+      const cy = e.clientY;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const hit = hitTestEdge(cx, cy);
+        hoveredRelRef.current = hit;
+        setHoveredRel((prev) => (prev === hit ? prev : hit));
+      });
+    };
     const up = () => {
+      const d = dragRef.current;
       dragRef.current = null;
-      if (panRafRef.current != null) {
-        cancelAnimationFrame(panRafRef.current);
-        panRafRef.current = null;
-      }
-      if (nodeRafRef.current != null) {
-        cancelAnimationFrame(nodeRafRef.current);
-        nodeRafRef.current = null;
-      }
-      if (pendingViewRef.current) {
-        setView(pendingViewRef.current);
-        pendingViewRef.current = null;
-      }
-      if (pendingPosRef.current) {
-        const p = pendingPosRef.current;
-        pendingPosRef.current = null;
-        setPositions((prev) => ({ ...prev, [p.key]: { x: p.x, y: p.y } }));
+      if (d) {
+        if (d.kind === "pan") {
+          setView({ ...viewRef.current });
+        } else {
+          const el = nodeElsRef.current.get(d.key);
+          if (el) el.style.willChange = "";
+          setPositions({ ...positionsRef.current });
+        }
+        scheduleEdgeRedraw();
       }
       // Reset click-vs-drag latch on next tick so click handlers (which run
       // before mouseup in some orders) can still read it. Use timeout 0.
       const wasMoved = movedRef.current;
       if (wasMoved) setTimeout(() => { movedRef.current = false; }, 0);
     };
+    window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
-    return () => window.removeEventListener("mouseup", up);
-  }, []);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      if (edgeRafRef.current != null) cancelAnimationFrame(edgeRafRef.current);
+      if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current);
+      edgeRafRef.current = null;
+      hoverRafRef.current = null;
+    };
+  }, [applyWorldTransformDirect, scheduleEdgeRedraw, hitTestEdge]);
 
   useEffect(() => {
     return () => {
@@ -841,6 +1167,23 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     }
     return m;
   }, [filtered, opts, relatedCols]);
+
+  // O(1) column-position lookups for edge geometry (no findIndex per frame).
+  const colIndex = useMemo(() => {
+    const index = new Map<string, Map<string, number>>();
+    const counts = new Map<string, number>();
+    for (const t of filtered) {
+      const key = tkey(t.schema, t.name);
+      const cols = tableRenderData.get(key)?.cols ?? [];
+      const im = new Map<string, number>();
+      cols.forEach((c, idx) => {
+        if (!im.has(c.name)) im.set(c.name, idx);
+      });
+      index.set(key, im);
+      counts.set(key, cols.length);
+    }
+    return { index, counts };
+  }, [filtered, tableRenderData]);
 
   // ── viewport culling: only mount DOM for tables intersecting the view ──
   const culled = useMemo(() => {
@@ -986,8 +1329,11 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     e.stopPropagation();
     e.preventDefault();
     clearTextSelection();
+    // Copy-on-write: detach the live layout from state so per-frame mutation
+    // during the gesture never touches React state.
+    positionsRef.current = { ...positionsRef.current };
     const p = positionsRef.current[key];
-    // Ref-mirrored view/positions keep this handler stable for memo.
+    // Ref-mirrored view keeps this handler stable for memo.
     const v = viewRef.current;
     const el = canvasRef.current;
     if (!p || !el) return;
@@ -997,71 +1343,11 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     movedRef.current = false;
     downAtRef.current = { x: e.clientX, y: e.clientY };
     dragRef.current = { kind: "node", key, offsetX: wx - p.x, offsetY: wy - p.y };
+    // Promote only the dragged card to its own GPU layer for the gesture.
+    const nodeEl = nodeElsRef.current.get(key);
+    if (nodeEl) nodeEl.style.willChange = "transform";
     setSelected(key);
   }, []);
-
-  function flushPendingView() {
-    if (panRafRef.current != null) return;
-    panRafRef.current = requestAnimationFrame(() => {
-      panRafRef.current = null;
-      if (pendingViewRef.current) {
-        const next = pendingViewRef.current;
-        pendingViewRef.current = null;
-        setView(next);
-      }
-    });
-  }
-
-  function flushPendingPos() {
-    if (nodeRafRef.current != null) return;
-    nodeRafRef.current = requestAnimationFrame(() => {
-      nodeRafRef.current = null;
-      if (pendingPosRef.current) {
-        const p = pendingPosRef.current;
-        pendingPosRef.current = null;
-        setPositions((prev) => {
-          const cur = prev[p.key];
-          if (cur && cur.x === p.x && cur.y === p.y) return prev;
-          return { ...prev, [p.key]: { x: p.x, y: p.y } };
-        });
-      }
-    });
-  }
-
-  function onCanvasMouseMove(e: React.MouseEvent) {
-    const d = dragRef.current;
-    if (!d) return;
-    // Latch drag-vs-click: beyond ~4px it's a drag, clicks won't copy.
-    if (!movedRef.current) {
-      const dx = e.clientX - downAtRef.current.x;
-      const dy = e.clientY - downAtRef.current.y;
-      if (dx * dx + dy * dy > 16) movedRef.current = true;
-    }
-    if (movedRef.current) clearTextSelection();
-    if (d.kind === "pan") {
-      const v = viewRef.current;
-      pendingViewRef.current = { ...v, x: d.origX + (e.clientX - d.startX), y: d.origY + (e.clientY - d.startY) };
-      flushPendingView();
-    } else {
-      const el = canvasRef.current;
-      if (!el) return;
-      const v = viewRef.current;
-      const rect = el.getBoundingClientRect();
-      const wx = (e.clientX - rect.left - v.x) / v.k;
-      const wy = (e.clientY - rect.top - v.y) / v.k;
-      const nx = Math.round(wx - d.offsetX);
-      const ny = Math.round(wy - d.offsetY);
-      pendingPosRef.current = { key: d.key, x: nx, y: ny };
-      flushPendingPos();
-    }
-  }
-
-  function endDrag() {
-    // Window mouseup listener does the real cleanup + flush; this keeps
-    // canvas-level handlers (mouseleave) from dropping the drag early.
-    // Only clear here if no buttons are held.
-    dragRef.current = null;
-  }
 
   const onHoverNode = useCallback((key: string | null) => {
     setHovered((prev) => (prev === key ? prev : key));
@@ -1078,75 +1364,48 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
   }, []);
 
   // ── edges (side-aware so lines leave the facing sides, plus self-loops) ──
+  // Committed geometry: used for SVG export + counts. The live canvas painter
+  // recomputes from positionsRef each frame so drags never touch React state.
   const edges = useMemo(() => {
-    const pairCount = new Map<string, number>();
-    const byKey = new Map(filtered.map((t) => [tkey(t.schema, t.name), t]));
-    return visibleRelations.map((r, i) => {
-      const sk = tkey(r.source_schema, r.source_table);
-      const tk = tkey(r.target_schema, r.target_table);
-      const sTable = byKey.get(sk);
-      const tTable = byKey.get(tk);
-      const sp = positions[sk];
-      const tp = positions[tk];
-      if (!sTable || !tTable || !sp || !tp) return null;
-      const sCols = tableRenderData.get(sk)?.cols ?? displayColumns(sTable, relatedCols, opts);
-      const tCols = sk === tk ? sCols : (tableRenderData.get(tk)?.cols ?? displayColumns(tTable, relatedCols, opts));
-      let sIdx = sCols.findIndex((c) => c.name === r.source_column);
-      let tIdx = tCols.findIndex((c) => c.name === r.target_column);
-      // Hidden in compact mode (shouldn't happen for FK cols) — fall back to header edge.
-      if (sIdx < 0) sIdx = 0;
-      if (tIdx < 0) tIdx = 0;
-      const header = opts.showRowCounts ? HEADER_H_WITH_META : HEADER_H_SLIM;
-      const rh = rowHeight(opts);
-      const sCount = Math.max(1, sCols.length);
-      const tCount = Math.max(1, tCols.length);
-      const y1 = sp.y + header + Math.min(sIdx, sCount - 1) * rh + rh / 2;
-      const y2 = tp.y + header + Math.min(tIdx, tCount - 1) * rh + rh / 2;
-      // offset overlapping edges between the same table pair
-      const pairKey = sk < tk ? `${sk}|${tk}|${r.source_column}|${r.target_column}` : `${tk}|${sk}|${r.target_column}|${r.source_column}`;
-      const n = pairCount.get(pairKey) ?? 0;
-      pairCount.set(pairKey, n + 1);
-      const lane = n * 9;
+    return buildEdgeGeom(visibleRelations, positions, colIndex.index, colIndex.counts, opts);
+  }, [visibleRelations, positions, colIndex, opts]);
 
-      // Self-reference: draw a loop on the right side.
-      if (sk === tk) {
-        const x = sp.x + NODE_W;
-        const loopW = 46 + n * 10;
-        const my1 = y1 + lane;
-        const my2 = y2 + lane;
-        const spread = Math.max(28, Math.abs(my2 - my1));
-        const d = `M ${x} ${my1} C ${x + loopW} ${my1}, ${x + loopW} ${my2 + (my2 === my1 ? spread : 0)}, ${x} ${my2 + (my2 === my1 ? spread : 0)}`;
-        return { r, i, d, x1: x, y1: my1, x2: x, y2: my2, midX: x + loopW - 6, midY: (my1 + my2) / 2, sk, tk };
-      }
-
-      // Connect the facing sides to shorten lines and reduce crossings.
-      const sourceLeft = sp.x + NODE_W / 2 > tp.x + NODE_W / 2;
-      const x1 = sourceLeft ? sp.x : sp.x + NODE_W;
-      const x2 = sourceLeft ? tp.x + NODE_W : tp.x;
-      const dir1 = sourceLeft ? -1 : 1;
-      const dir2 = sourceLeft ? 1 : -1;
-      const dx = Math.max(48, Math.abs(x2 - x1) / 2);
-      const my1 = y1 + lane;
-      const my2 = y2 + lane;
-      const d = `M ${x1} ${my1} C ${x1 + dir1 * dx} ${my1}, ${x2 + dir2 * dx} ${my2}, ${x2} ${my2}`;
-      const midX = (x1 + x2) / 2;
-      const midY = (my1 + my2) / 2;
-      return { r, i, d, x1, y1: my1, x2, y2: my2, midX, midY, sk, tk };
-    });
-  }, [visibleRelations, filtered, positions, opts, relatedCols, tableRenderData]);
-
-  // Only mount SVG for edges touching the culled viewport. When zoomed out
-  // this is everything; when zoomed in it skips far off-screen edges.
-  const renderedEdges = useMemo(() => {
-    if (edges.length === 0) return [] as typeof edges;
-    // Small diagrams: no need to filter.
-    if (culled.keys.size >= filtered.length) return edges;
-    return edges.filter((e) => e && (culled.keys.has(e.sk) || culled.keys.has(e.tk)));
-  }, [edges, culled, filtered.length]);
-
-  // Relation labels double the SVG DOM — with many edges only label the
+  // Relation labels double the paint cost — with many edges only label the
   // hovered / highlighted ones.
   const labelAllEdges = visibleRelations.length <= 150;
+
+  // ── canvas mirror sync (painter reads refs, never state) ──
+  useEffect(() => {
+    relationsRef.current = visibleRelations;
+    colIndexRef.current = colIndex.index;
+    colCountRef.current = colIndex.counts;
+  }, [visibleRelations, colIndex]);
+  useEffect(() => {
+    // Never clobber live gesture values with stale committed state.
+    if (dragRef.current?.kind !== "pan") viewRef.current = view;
+  }, [view]);
+  useEffect(() => {
+    if (dragRef.current?.kind !== "node") positionsRef.current = positions;
+  }, [positions]);
+  useEffect(() => {
+    optsRef.current = opts;
+  }, [opts]);
+  useEffect(() => {
+    highlightRef.current = highlight;
+  }, [highlight]);
+  useEffect(() => {
+    hoveredRelRef.current = hoveredRel;
+  }, [hoveredRel]);
+  useEffect(() => {
+    culledKeysRef.current = culled.keys;
+  }, [culled]);
+  useEffect(() => {
+    labelAllRef.current = labelAllEdges;
+  }, [labelAllEdges]);
+  // Repaint on any committed change (zoom, filter, select, hover, resize).
+  useEffect(() => {
+    drawEdgesCanvas();
+  }, [view, edges, highlight, hoveredRel, culled, labelAllEdges, opts, canvasSize, drawEdgesCanvas]);
 
   // ── export ──
   function exportSvg() {
@@ -1241,6 +1500,15 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     );
   }
 
+  // Live gesture values win over committed state during a drag, so an
+  // unrelated re-render mid-gesture (hover, toast) never snaps visuals back.
+  const liveDrag = dragRef.current;
+  const renderView = liveDrag?.kind === "pan" ? viewRef.current : view;
+  const livePosFor = (key: string) =>
+    liveDrag && liveDrag.kind === "node" && liveDrag.key === key
+      ? (positionsRef.current[key] ?? positions[key])
+      : positions[key];
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* toolbar */}
@@ -1284,7 +1552,6 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
           {culled.tables.length < filtered.length && <span className="text-slate-500">({culled.tables.length} in view)</span>}
           <span className="text-slate-600">·</span>
           <Link2 size={12} className="text-violet2" /> {visibleRelations.length} rels
-          {renderedEdges.length < edges.length && <span className="text-slate-500">({renderedEdges.length} in view)</span>}
         </div>
 
         <select
@@ -1364,105 +1631,39 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
           style={{ userSelect: "none", WebkitUserSelect: "none", touchAction: "none" }}
           onWheel={onWheel}
           onMouseDown={onCanvasMouseDown}
-          onMouseMove={onCanvasMouseMove}
-          onMouseUp={endDrag}
           onMouseLeave={() => {
-            setHovered(null);
+            // Never drop an in-progress gesture here — the window mouseup
+            // handler owns drag lifetime. Just clear hover states.
+            if (!dragRef.current) setHovered(null);
+            if (hoveredRelRef.current !== null) {
+              hoveredRelRef.current = null;
+              setHoveredRel(null);
+            }
           }}
-          onClick={() => {
-            // Don't clear selection when the click ended a pan-drag.
+          onClick={(e) => {
+            // Don't clear selection when the click ended a pan-drag, or when
+            // the user clicked a relation line (canvas hit test).
             if (movedRef.current) return;
+            if (hitTestEdge(e.clientX, e.clientY) != null) return;
             setSelected(null);
           }}
           onDragStart={(e) => e.preventDefault()}
         >
+          {/* GPU edge layer: single canvas, repainted at devicePixelRatio so
+              lines and labels stay razor-sharp at any zoom. Pointer events off;
+              hover/click are resolved geometrically (see hitTestEdge). */}
+          <canvas ref={edgesCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
           <div
+            ref={worldRef}
             className="absolute left-0 top-0 select-none"
-            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`, transformOrigin: "0 0", willChange: "transform", userSelect: "none", WebkitUserSelect: "none" }}
+            style={{ transform: `translate(${renderView.x}px, ${renderView.y}px) scale(${renderView.k})`, transformOrigin: "0 0", userSelect: "none", WebkitUserSelect: "none", pointerEvents: "none" }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* edges — culled to viewport, glow only on hover */}
-            <svg
-              className="absolute left-0 top-0 overflow-visible"
-              width={10}
-              height={10}
-              style={{ overflow: "visible" }}
-            >
-              <defs>
-                <marker id="er-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#22d3ee" fillOpacity="0.9" />
-                </marker>
-                <marker id="er-arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#64748b" fillOpacity="0.7" />
-                </marker>
-                <filter id="er-glow" x="-40%" y="-40%" width="180%" height="180%">
-                  <feGaussianBlur stdDeviation="3" result="b" />
-                  <feMerge>
-                    <feMergeNode in="b" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-              </defs>
-              {renderedEdges.map((e) => {
-                if (!e) return null;
-                const isHoveredEdge = hoveredRel === e.i;
-                const isActive = isHoveredEdge || (highlight && highlight.rels.has(e.i));
-                const isDim = highlight && !highlight.rels.has(e.i);
-                const showLabel = opts.showRelationLabels && view.k > 0.45 && (labelAllEdges || isActive);
-                return (
-                  <g key={e.i} opacity={isDim ? 0.18 : 1}>
-                    {/* hit area */}
-                    <path
-                      d={e.d}
-                      fill="none"
-                      stroke="transparent"
-                      strokeWidth={16}
-                      className="cursor-pointer"
-                      onMouseEnter={() => {
-                        setHoveredRel(e.i);
-                      }}
-                      onMouseLeave={() => setHoveredRel(null)}
-                      onClick={(ev) => ev.stopPropagation()}
-                    />
-                    <path
-                      d={e.d}
-                      fill="none"
-                      stroke={isActive ? "#22d3ee" : "#7c8aa5"}
-                      strokeOpacity={isActive ? 0.95 : 0.55}
-                      strokeWidth={isActive ? 2.2 : 1.5}
-                      markerEnd={isActive ? "url(#er-arrow)" : "url(#er-arrow-dim)"}
-                      filter={isHoveredEdge ? "url(#er-glow)" : undefined}
-                      strokeDasharray={isActive ? undefined : "1 0"}
-                      className="pointer-events-none"
-                    />
-                    {/* FK dot at source */}
-                    <circle cx={e.x1} cy={e.y1} r={isActive ? 4 : 3} fill={isActive ? "#22d3ee" : "#7c8aa5"} className="pointer-events-none" />
-                    {showLabel && (
-                      <g className="pointer-events-none">
-                        <rect
-                          x={e.midX - 62}
-                          y={e.midY - 10}
-                          width={124}
-                          height={18}
-                          rx={9}
-                          fill="#0d1424"
-                          fillOpacity={0.92}
-                          stroke={isActive ? "rgba(34,211,238,0.5)" : "rgba(148,163,184,0.25)"}
-                        />
-                        <text x={e.midX} y={e.midY + 3.5} textAnchor="middle" fontSize={9.5} fontFamily="JetBrains Mono, monospace" fill={isActive ? "#a5f3fc" : "#94a3b8"}>
-                          {e.r.source_column} → {e.r.target_column}
-                        </text>
-                      </g>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
 
             {/* nodes — viewport-culled + memoized */}
             {culled.tables.map((t) => {
               const key = tkey(t.schema, t.name);
-              const p = positions[key];
+              const p = livePosFor(key);
               if (!p) return null;
               const data = tableRenderData.get(key);
               const cols = data?.cols ?? [];
@@ -1489,6 +1690,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
                   onSelect={onSelectNode}
                   onCopy={copyName}
                   onShowAll={onShowAllColumns}
+                  registerNodeEl={registerNodeEl}
                 />
               );
             })}
