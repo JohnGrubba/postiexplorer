@@ -14,6 +14,7 @@ import type {
   TablePrivileges,
   TestConnectionResult,
 } from "../types";
+import { splitStatements, isEmptyStatement } from "./sqlsplit";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -139,111 +140,6 @@ const MOCK_ROWS: Record<string, unknown[][]> = {
 
 const VIEW_TABLES = new Set(["order_summary"]);
 
-/** Minimal top-level `;` splitter for mock batches (quotes/comments/dollar quotes). */
-function splitMockStatements(sql: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let i = 0;
-  const n = sql.length;
-  while (i < n) {
-    const c = sql[i];
-    if (c === "-" && sql[i + 1] === "-") {
-      while (i < n && sql[i] !== "\n") cur += sql[i++];
-      continue;
-    }
-    if (c === "/" && sql[i + 1] === "*") {
-      let depth = 1;
-      cur += "/*";
-      i += 2;
-      while (i < n && depth > 0) {
-        if (sql[i] === "/" && sql[i + 1] === "*") {
-          depth++;
-          cur += "/*";
-          i += 2;
-        } else if (sql[i] === "*" && sql[i + 1] === "/") {
-          depth--;
-          cur += "*/";
-          i += 2;
-        } else cur += sql[i++];
-      }
-      continue;
-    }
-    if (c === "'") {
-      cur += c;
-      i++;
-      while (i < n) {
-        cur += sql[i];
-        if (sql[i] === "'") {
-          if (sql[i + 1] === "'") {
-            cur += sql[i + 1];
-            i += 2;
-            continue;
-          }
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (c === '"') {
-      cur += c;
-      i++;
-      while (i < n) {
-        cur += sql[i];
-        if (sql[i] === '"') {
-          if (sql[i + 1] === '"') {
-            cur += sql[i + 1];
-            i += 2;
-            continue;
-          }
-          i++;
-          break;
-        }
-        i++;
-      }
-      continue;
-    }
-    if (c === "$") {
-      const m = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(i));
-      if (m) {
-        const delim = m[0];
-        cur += delim;
-        i += delim.length;
-        const end = sql.indexOf(delim, i);
-        if (end === -1) {
-          cur += sql.slice(i);
-          i = n;
-        } else {
-          cur += sql.slice(i, end + delim.length);
-          i = end + delim.length;
-        }
-        continue;
-      }
-      cur += c;
-      i++;
-      continue;
-    }
-    if (c === ";") {
-      out.push(cur);
-      cur = "";
-      i++;
-      continue;
-    }
-    cur += c;
-    i++;
-  }
-  out.push(cur);
-  return out;
-}
-
-/** True when a mock statement holds nothing but whitespace/comments/`;`. */
-function isMockEmpty(s: string): boolean {
-  let t = s.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-  t = t.replace(/;/g, "").trim();
-  return t === "";
-}
-
 export const mock = {
   async testConnection(_p: ConnectionProfile): Promise<TestConnectionResult> {
     await delay(350);
@@ -350,9 +246,8 @@ export const mock = {
   },
   async executeSqlBatch(sql: string): Promise<BatchQueryResult> {
     const t0 = Date.now();
-    // Quote-aware split on top-level `;` (mirrors the backend splitter for
-    // the common cases: quotes, comments, dollar quotes).
-    const parts = splitMockStatements(sql).filter((s) => !isMockEmpty(s));
+    // Shared splitter (same semantics as the Rust backend).
+    const parts = splitStatements(sql).filter((s) => !isEmptyStatement(s));
     if (parts.length === 0) throw new Error("empty query");
     if (parts.length > 100) throw new Error("too many statements (max 100 per batch)");
     const results: QueryResult[] = [];
@@ -583,5 +478,26 @@ export const mock = {
     if (!col) throw new Error(`column "${column}" not found`);
     col.default_value = defaultValue;
     return 1;
+  },
+  async getTableDdl(schema: string, table: string): Promise<import("../types").TableDdl> {
+    await delay(120);
+    const cols = MOCK_COLUMNS[table];
+    if (!cols) throw new Error(`table "${schema}"."${table}" not found`);
+    if (VIEW_TABLES.has(table)) {
+      return { schema, table, kind: "view", ddl: `CREATE OR REPLACE VIEW "${schema}"."${table}" AS SELECT * FROM "${schema}"."users";` };
+    }
+    const q = (id: string) => `"${id.replace(/"/g, '""')}"`;
+    const colDefs = cols.map((c) => {
+      let d = `${q(c.name)} ${c.data_type.toUpperCase()}`;
+      if (!c.is_nullable) d += " NOT NULL";
+      if (c.default_value != null && c.default_value !== "") d += ` DEFAULT ${c.default_value}`;
+      return d;
+    });
+    const pks = cols.filter((c) => c.is_primary).map((c) => q(c.name));
+    let ddl = `CREATE TABLE ${q(schema)}.${q(table)} (\n  ${colDefs.join(",\n  ")}\n);`;
+    if (pks.length > 0) {
+      ddl += `\nALTER TABLE ${q(schema)}.${q(table)} ADD CONSTRAINT ${q(`${table}_pkey`)} PRIMARY KEY (${pks.join(", ")});`;
+    }
+    return { schema, table, kind: "table", ddl };
   },
 };

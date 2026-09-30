@@ -1016,3 +1016,116 @@ async fn import_rows_flow() {
         .expect("cleanup");
     db::close_connection(&state, &id);
 }
+
+#[tokio::test]
+async fn dump_ddl_flow() {
+    let state = DbState::default();
+    let id = db::open_connection(&state, profile())
+        .await
+        .expect("connect");
+
+    // Parent + child with PK / FK / UNIQUE / CHECK / DEFAULT / NOT NULL.
+    db::op_execute_sql(&state, &id, "DROP TABLE IF EXISTS public.__px_dump_child")
+        .await
+        .expect("drop stale child");
+    db::op_execute_sql(&state, &id, "DROP TABLE IF EXISTS public.__px_dump_parent")
+        .await
+        .expect("drop stale parent");
+    db::op_execute_sql(
+        &state,
+        &id,
+        "CREATE TABLE public.__px_dump_parent (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT NOT NULL UNIQUE, plan TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free','pro')))",
+    )
+    .await
+    .expect("create parent");
+    db::op_execute_sql(
+        &state,
+        &id,
+        "CREATE TABLE public.__px_dump_child (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id UUID NOT NULL REFERENCES public.__px_dump_parent(id) ON DELETE CASCADE, note TEXT DEFAULT 'hi')",
+    )
+    .await
+    .expect("create child");
+    db::op_execute_sql(
+        &state,
+        &id,
+        "CREATE INDEX __px_dump_child_note_idx ON public.__px_dump_child (note)",
+    )
+    .await
+    .expect("create index");
+
+    let parent = db::op_get_table_ddl(&state, &id, "public", "__px_dump_parent")
+        .await
+        .expect("parent ddl");
+    assert_eq!(parent.kind, "table");
+    assert!(parent.ddl.contains("CREATE TABLE"), "ddl: {}", parent.ddl);
+    assert!(parent.ddl.contains("\"email\""), "ddl: {}", parent.ddl);
+    assert!(parent.ddl.contains("NOT NULL"), "ddl: {}", parent.ddl);
+    assert!(parent.ddl.contains("DEFAULT"), "ddl: {}", parent.ddl);
+    assert!(parent.ddl.contains("PRIMARY KEY"), "ddl: {}", parent.ddl);
+    assert!(parent.ddl.contains("UNIQUE"), "ddl: {}", parent.ddl);
+    assert!(parent.ddl.contains("CHECK"), "ddl: {}", parent.ddl);
+
+    let child = db::op_get_table_ddl(&state, &id, "public", "__px_dump_child")
+        .await
+        .expect("child ddl");
+    assert!(child.ddl.contains("REFERENCES"), "ddl: {}", child.ddl);
+    assert!(child.ddl.contains("__px_dump_parent"), "ddl: {}", child.ddl);
+    assert!(
+        child.ddl.contains("__px_dump_child_note_idx"),
+        "ddl: {}",
+        child.ddl
+    );
+
+    // Views dump as CREATE OR REPLACE VIEW.
+    let view = db::op_get_table_ddl(&state, &id, "public", "order_summary")
+        .await
+        .expect("view ddl");
+    assert_eq!(view.kind, "view");
+    assert!(
+        view.ddl.to_uppercase().contains("CREATE"),
+        "ddl: {}",
+        view.ddl
+    );
+    assert!(
+        view.ddl.to_uppercase().contains("VIEW"),
+        "ddl: {}",
+        view.ddl
+    );
+
+    // Missing relations error with an actionable message.
+    assert!(
+        db::op_get_table_ddl(&state, &id, "public", "no_such_table_xyz")
+            .await
+            .is_err()
+    );
+
+    // Round-trip: the dumped DDL recreates an identical shape.
+    db::op_execute_sql(&state, &id, "DROP TABLE public.__px_dump_child")
+        .await
+        .expect("drop child");
+    db::op_execute_sql(&state, &id, "DROP TABLE public.__px_dump_parent")
+        .await
+        .expect("drop parent");
+    db::op_execute_sql_batch(&state, &id, &parent.ddl)
+        .await
+        .expect("recreate parent");
+    db::op_execute_sql_batch(&state, &id, &child.ddl)
+        .await
+        .expect("recreate child");
+    let cols = db::op_get_columns(&state, &id, "public", "__px_dump_parent")
+        .await
+        .expect("cols");
+    assert!(cols.iter().any(|c| c.name == "email" && !c.is_nullable));
+    let privs = db::op_get_table_privileges(&state, &id, "public", "__px_dump_child")
+        .await
+        .expect("privs");
+    assert!(privs.select, "privs: {privs:?}");
+
+    db::op_execute_sql(&state, &id, "DROP TABLE public.__px_dump_child")
+        .await
+        .expect("cleanup child");
+    db::op_execute_sql(&state, &id, "DROP TABLE public.__px_dump_parent")
+        .await
+        .expect("cleanup parent");
+    db::close_connection(&state, &id);
+}

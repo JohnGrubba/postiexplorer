@@ -55,7 +55,8 @@ Or build locally — see [BUILD.md](BUILD.md).
 | **ER Model** | Interactive diagram of all user tables + FK edges on a GPU-composited canvas edge layer (devicePixelRatio-crisp, geometric hit-testing): pan/zoom (25–220%), drag-to-arrange, fit-to-view, 4 auto-layouts (Auto `related` / Grid / By schema / Hub & spokes) with relayout, search across tables **and** columns, schema filter chips, click-to-isolate with dimming, click-to-copy table/column names, `+N more — show all` in compact mode, viewport culling + memoized nodes for large diagrams, SVG export + Mermaid copy (native save dialog on desktop) |
 | **ER detail toggles** | 9 toggles persisted to `localStorage`: relations-only (keys-only compact mode) · column types · nullability dots · defaults · row counts · views · isolated tables · relation labels (auto-throttled past 150 edges, hidden below 0.45× zoom) · schema colours |
 | **Query** | SQL editor (Ctrl/Cmd+Enter) with **multi-statement batches** (`;`-separated, quote/comment/dollar-quote aware splitter in `db.rs`, max 100 statements, autocommit like psql, failures report `statement N failed` with SQLSTATE): per-statement result tabs (`#N COMMAND · rows`), total + per-statement timing; results grid with type badges, per-profile+database persisted SQL/history/batch (`localStorage`, debounced, each result capped at 200 rows × 10 statements); 20-entry deduped history with clear + click-to-rerun; selection-following starter `SELECT * … LIMIT 100` until first edit/run; timing + row count + command + `rows affected` notice for writes; CSV export with BOM for Excel (native Save dialog via `@tauri-apps/plugin-dialog` + `plugin-fs` on desktop, anchor download in browser) |
-| **Import / export** | Table **CSV export** (paged `getTableData`, up to 50k rows, BOM CSV + native save) and **CSV import** (`CsvImportDialog`: file picker or paste, RFC-4180 parser in `src/lib/csv.ts`, header-name or positional mapping, `Empty → NULL` toggle, preview, chunked `importRows` in 500-row batches): multi-row `INSERT` in `db.rs` (quoted identifiers, literal values so payloads land as data, 1000 rows / ~10 MB per batch); query-result CSV export as before; full `pg_dump` restore still planned |
+| **Import / export** | Table **CSV export** (paged `getTableData`, up to 50k rows, BOM CSV + native save) and **CSV import** (`CsvImportDialog`: file picker or paste, RFC-4180 parser in `src/lib/csv.ts`, header-name or positional mapping, `Empty → NULL` toggle, preview, chunked `importRows` in 500-row batches): multi-row `INSERT` in `db.rs` (quoted identifiers, literal values so payloads land as data, 1000 rows / ~10 MB per batch); query-result CSV export as before |
+| **SQL dump / restore** | Logical **`.sql` dump + restore**: per-table DDL from the catalog (`get_table_ddl` — server-formatted types via `format_type`, `NOT NULL`/`DEFAULT`, PK/FK/UNIQUE/CHECK as `ALTER … ADD CONSTRAINT`, plain indexes via `pg_get_indexdef`, views as `CREATE OR REPLACE VIEW`, matviews `WITH NO DATA`, foreign tables noted-skipped) plus multi-row `INSERT`s (500 rows each, `BEGIN;`/`COMMIT;`, parents-first via ER FK topology, views last, 50k rows/table cap) in `src/lib/dump.ts`; **Export** per-database (`Dump / Restore` in the sidebar with object checklist + schema/data toggles) and per-table (`SQL` button in Data tab); **Restore** chunked through `execute_sql_batch` (≤100 statements/batch, global `statement N failed` indexes) with progress; `.sql` files also open directly in the Query editor |
 | **Server** | Version, database size, table count, connections (`n / max`), uptime cards; notes that extensions / roles / vacuum / replication / locks panels are stubbed for the next milestone |
 | **Web preview vs desktop** | `isTauri()` checks **both** `__TAURI__` and `__TAURI_INTERNALS__`; browser (`npm run dev`) uses `src/lib/mock.ts` demo dataset (`demo_db` / `analytics` / `postgres`; `public` / `auth` / `billing`; incl. `order_summary` view), header shows `web preview · mock data`; desktop (`npm run tauri dev`) calls the Rust backend, header shows `desktop · live backend` |
 
@@ -69,10 +70,9 @@ Or build locally — see [BUILD.md](BUILD.md).
 | Roles / users manager | Planned |
 | EXPLAIN ANALYZE visualizer | Planned |
 | TLS (`sslmode=require`) | Accepted + validated, still connects via `NoTls` — see `TLS TODO` in `src-tauri/src/db.rs` |
-| Full dump / restore (pg_dump) | Planned (table + query CSV import/export done) |
 
 Extension points for these already exist (`FutureModule` in `src/types.ts`;
-modular command layer in `src-tauri/src/db.rs` — 26 thin `#[tauri::command]`
+modular command layer in `src-tauri/src/db.rs` — 27 thin `#[tauri::command]`
 wrappers in `src-tauri/src/main.rs` over `db.rs` operations).
 
 ## Architecture
@@ -94,14 +94,20 @@ strict `(block,offset)` validation); `quote_ident` + `quote_literal` /
 `json_to_literal` keep DDL/DML/import injection-safe; `split_statements`
 runs multi-statement batches (`'…'`/`"…"`, `--`/`/*…*/`, `$tag$…$tag$`
 aware, comment-only filtered, max 100); `importRows` builds multi-row
-`INSERT` (max 1000 rows / ~10 MB per call); empty `profile.database`
-connects to the `postgres` maintenance DB.
+`INSERT` (max 1000 rows / ~10 MB per call); `get_table_ddl` renders
+`CREATE TABLE` + constraints + indexes from `pg_attribute` /
+`pg_constraint` / `pg_indexes` (`format_type`, `pg_get_constraintdef`,
+`pg_get_indexdef`) and view definitions from `pg_views` / `pg_matviews`;
+empty `profile.database` connects to the `postgres` maintenance DB.
 
 Frontend details: `src/lib/api.ts` (`isTauri` dual-check, `effectiveProfile`,
 `connectionId` handle, identical signatures for Tauri/mock) ·
 `src/lib/profiles.ts` (`localStorage`) · `src/lib/download.ts` (Tauri native
 save vs anchor fallback, BOM CSV builder) · `src/lib/csv.ts` (RFC-4180
-`parseCsv` + header/positional `mapCsvToColumns`). Layout is `h-screen` flex with
+`parseCsv` + header/positional `mapCsvToColumns`) · `src/lib/sqlsplit.ts`
+(shared top-level-`;` splitter) · `src/lib/dump.ts` (`toSqlLiteral`,
+parents-first `exportDump`, chunked `restoreDump`, single-table
+`exportTableSql`). Layout is `h-screen` flex with
 internal scroll (1280×800 window, 960px min width — no horizontal overflow).
 
 ## Quick start (development)
@@ -134,25 +140,29 @@ src/                  React frontend
   App.tsx             Profiles, connect/switch/disconnect, schema/table/tab state,
                       per-profile+db query persist key
   assets/logo.svg     App logo (header)
-  components/         Header, Sidebar (+ CreateTableDialog), DataGrid,
-                      TableDataView (+ CsvImportDialog for CSV import, Export button),
-                      RowEditorDialog, StructureView (+ ColumnDialog),
-                      ErDiagramView, QueryView (multi-statement tabs), InfoView,
-                      ConnectionDialog, StatusBar
+  components/         Header, Sidebar (+ CreateTableDialog, Dump/Restore button
+                      → DumpDialog), DataGrid,
+                      TableDataView (+ CsvImportDialog for CSV import, CSV + SQL
+                      export buttons), RowEditorDialog, StructureView (+ ColumnDialog),
+                      ErDiagramView, QueryView (multi-statement tabs, Open .sql),
+                      InfoView, ConnectionDialog, StatusBar
   lib/api.ts          Tauri invoke wrapper + browser mock fallback (isTauri,
                       effectiveProfile, connectionId)
   lib/mock.ts         Demo dataset (used when Tauri IPC is absent)
   lib/profiles.ts     localStorage persistence for connection profiles
   lib/download.ts     Native save-dialog vs anchor download + BOM CSV builder
   lib/csv.ts          RFC-4180 parseCsv + mapCsvToColumns for imports
+  lib/sqlsplit.ts     Shared top-level-`;` splitter (+ isEmptyStatement/splitBatch)
+  lib/dump.ts         toSqlLiteral + exportDump/restoreDump/exportTableSql
+                      (500-row INSERTs, ≤100-statement restore batches, 50k rows/table)
   types.ts            Shared TS types (mirror of Rust models.rs + FutureModule stub
-                      + BatchQueryResult, IMPORT_BATCH_SIZE, EXPORT_MAX_ROWS)
+                      + BatchQueryResult, TableDdl, IMPORT_BATCH_SIZE, EXPORT_MAX_ROWS)
 src-tauri/
   src/lib.rs          Library root (re-exports db + models for tests)
-  src/main.rs         26 thin Tauri commands (wrappers over db.rs)
+  src/main.rs         27 thin Tauri commands (wrappers over db.rs)
   src/db.rs           All SQL + connection pool (Arc<Mutex<Client>>)
   src/models.rs       Serde structs
-  tests/live_db.rs    Integration tests vs real PostgreSQL (11 tests)
+  tests/live_db.rs    Integration tests vs real PostgreSQL (12 tests)
   tauri.conf.json     Window (1280×800, min 960×600) + bundle config
   capabilities/default.json  Permissions
   icons/              App icons
@@ -183,7 +193,7 @@ Env overrides: `PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB` (defaults
 `localhost 5432 postgres postgres demo_db`).
 Reseed with `docker compose down -v && docker compose up -d`.
 
-`src-tauri/tests/live_db.rs` (11 tests) covers connect, empty-database picker
+`src-tauri/tests/live_db.rs` (12 tests) covers connect, empty-database picker
 flow, wrong-password (`28P01`) / wrong-database (`3D000`) errors, databases →
 schemas → tables → columns → paged/sorted rows → raw SQL → server info, ctid
 CRUD on a PK-less temp table (insert, injection-as-literal, update, stale-ctid
@@ -192,8 +202,10 @@ readonly-role gating (reads allowed, DDL/DML denied server-side), the full
 DDL flow (create → add → rename → alter type → nullable → default → drop
 column → drop table + validation rejections), multi-statement batches
 (splitter: quotes/comments/dollar-quotes, comment-only rejected, `statement N
-failed` with `42P01`), and CSV import (`importRows` multi-row INSERT,
-injection-as-literal, ragged/duplicate/unsafe validation). CI runs the same suite on every
+failed` with `42P01`), CSV import (`importRows` multi-row INSERT,
+injection-as-literal, ragged/duplicate/unsafe validation), and SQL dump DDL
+(`get_table_ddl`: PK/FK/UNIQUE/CHECK/DEFAULT/NOT NULL/index/view definitions,
+missing-table error, DDL round-trip recreate). CI runs the same suite on every
 push (Linux job with `postgres:16` service + `seed.sql`).
 
 ## Contributing

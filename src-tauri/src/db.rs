@@ -1791,3 +1791,173 @@ pub async fn op_set_column_default(
         .map_err(pg_err)
         .map(|n| n as u64)
 }
+
+// ── SQL dump: per-table DDL for backup files ───────────────
+// Returns `CREATE TABLE` (+ `ALTER … ADD CONSTRAINT` + `CREATE INDEX`)
+// for heap relations, or `CREATE OR REPLACE VIEW` / materialized view
+// definitions for views. Data itself is paged through the existing
+// `op_get_table_data` so no new large-payload path is needed; the
+// frontend assembles DDL + multi-row INSERTs into a `.sql` file that
+// `op_execute_sql_batch` can restore.
+
+pub async fn op_get_table_ddl(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TableDdl, String> {
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+
+    let relkind = fetch_relkind(&client, schema, table).await?;
+    let kind = match relkind.as_str() {
+        "r" | "p" => "table",
+        "v" => "view",
+        "m" => "materialized_view",
+        "f" => "foreign_table",
+        _ => "table",
+    }
+    .to_string();
+
+    // Views: single CREATE OR REPLACE from the catalog definition.
+    if relkind == "v" {
+        let row = client
+            .query_opt(
+                "SELECT definition FROM pg_views WHERE schemaname = $1 AND viewname = $2",
+                &[&schema, &table],
+            )
+            .await
+            .map_err(pg_err)?;
+        let def: Option<String> = row.map(|r| r.get(0));
+        match def {
+            Some(d) => {
+                let d = d.trim().trim_end_matches(';');
+                return Ok(TableDdl {
+                    schema: schema.to_string(),
+                    table: table.to_string(),
+                    kind,
+                    ddl: format!("CREATE OR REPLACE VIEW {qs}.{qt} AS {d};"),
+                });
+            }
+            None => return Err(format!("table \"{schema}\".\"{table}\" not found")),
+        }
+    }
+    if relkind == "m" {
+        let row = client
+            .query_opt(
+                "SELECT definition FROM pg_matviews WHERE schemaname = $1 AND matviewname = $2",
+                &[&schema, &table],
+            )
+            .await
+            .map_err(pg_err)?;
+        let def: Option<String> = row.map(|r| r.get(0));
+        match def {
+            Some(d) => {
+                let d = d.trim().trim_end_matches(';');
+                return Ok(TableDdl {
+                    schema: schema.to_string(),
+                    table: table.to_string(),
+                    kind,
+                    ddl: format!("CREATE MATERIALIZED VIEW {qs}.{qt} AS {d} WITH NO DATA;"),
+                });
+            }
+            None => return Err(format!("table \"{schema}\".\"{table}\" not found")),
+        }
+    }
+    if relkind == "f" {
+        return Ok(TableDdl {
+            schema: schema.to_string(),
+            table: table.to_string(),
+            kind,
+            ddl: format!(
+                "-- Foreign table {qs}.{qt} skipped (server/options are server-specific and not dumped)."
+            ),
+        });
+    }
+
+    // Columns with server-formatted types, nullability and defaults.
+    let col_rows = client
+        .query(
+            "SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                    pg_get_expr(d.adbin, d.adrelid)
+             FROM pg_attribute a
+             JOIN pg_class c ON c.oid = a.attrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+             WHERE n.nspname = $1 AND c.relname = $2
+               AND a.attnum > 0 AND NOT a.attisdropped
+             ORDER BY a.attnum",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+    if col_rows.is_empty() {
+        return Err(format!("table \"{schema}\".\"{table}\" not found"));
+    }
+    let mut col_defs = Vec::with_capacity(col_rows.len());
+    for r in &col_rows {
+        let name: String = r.get(0);
+        let ty: String = r.get(1);
+        let notnull: bool = r.get(2);
+        let default: Option<String> = r.get(3);
+        let mut def = format!("{} {}", quote_ident(&name)?, ty);
+        if notnull {
+            def.push_str(" NOT NULL");
+        }
+        if let Some(d) = default {
+            def.push_str(&format!(" DEFAULT {d}"));
+        }
+        col_defs.push(def);
+    }
+
+    // All constraints as ALTERs (uniform for PK / FK / UNIQUE / CHECK).
+    let con_rows = client
+        .query(
+            "SELECT con.conname, pg_get_constraintdef(con.oid)
+             FROM pg_constraint con
+             JOIN pg_class c ON c.oid = con.conrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relname = $2
+             ORDER BY con.oid",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+
+    // Plain indexes (constraint-backed ones are covered above).
+    let idx_rows = client
+        .query(
+            "SELECT pg_get_indexdef(i.indexrelid)
+             FROM pg_index i
+             JOIN pg_class t ON t.oid = i.indrelid
+             JOIN pg_namespace n ON n.oid = t.relnamespace
+             LEFT JOIN pg_constraint c ON c.conindid = i.indexrelid
+             WHERE n.nspname = $1 AND t.relname = $2
+               AND c.oid IS NULL AND NOT i.indisprimary",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(pg_err)?;
+
+    let mut ddl = format!("CREATE TABLE {qs}.{qt} (\n  {}\n);", col_defs.join(",\n  "));
+    for r in &con_rows {
+        let conname: String = r.get(0);
+        let condef: String = r.get(1);
+        ddl.push_str(&format!(
+            "\nALTER TABLE {qs}.{qt} ADD CONSTRAINT {} {condef};",
+            quote_ident(&conname)?
+        ));
+    }
+    for r in &idx_rows {
+        let idxdef: String = r.get(0);
+        ddl.push_str(&format!("\n{idxdef};"));
+    }
+    Ok(TableDdl {
+        schema: schema.to_string(),
+        table: table.to_string(),
+        kind,
+        ddl,
+    })
+}

@@ -300,6 +300,16 @@ async fn set_column_default(
     .await
 }
 
+#[tauri::command]
+async fn get_table_ddl(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+) -> Result<TableDdl, String> {
+    db::op_get_table_ddl(&state, &connection_id, &schema, &table).await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -332,7 +342,8 @@ fn main() {
             rename_column,
             alter_column_type,
             set_column_nullable,
-            set_column_default
+            set_column_default,
+            get_table_ddl
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

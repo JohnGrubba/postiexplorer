@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, History, Play, Trash2 } from "lucide-react";
+import { Download, FolderOpen, History, Play, Trash2 } from "lucide-react";
 import { executeSqlBatch } from "../lib/api";
 import { buildCsv, downloadTextFile } from "../lib/download";
 import type { BatchQueryResult, QueryResult } from "../types";
@@ -214,6 +214,18 @@ export default function QueryView({
     await downloadTextFile("query-result.csv", csv, "text/csv;charset=utf-8");
   }
 
+  async function openFile(f: File | undefined) {
+    if (!f) return;
+    try {
+      const text = await f.text();
+      touchedRef.current = true;
+      setSql(text);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-2 border-b border-edge px-3 py-2">
@@ -222,6 +234,13 @@ export default function QueryView({
           multi-statement supported
         </span>
         <div className="flex-1" />
+        <label
+          title="Open .sql file into the editor"
+          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-edge bg-white/5 px-2.5 text-xs text-slate-200 hover:bg-white/10"
+        >
+          <FolderOpen size={13} /> Open
+          <input type="file" accept=".sql,.txt,text/sql" className="hidden" onChange={(e) => void openFile(e.target.files?.[0])} />
+        </label>
         <button
           onClick={exportCsv}
           disabled={!active || active.columns.length === 0}

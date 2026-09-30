@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Download, Pencil, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, FileCode, Pencil, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { deleteRows, getColumns, getTableData, insertRow, updateRow } from "../lib/api";
 import { buildCsv, downloadTextFile } from "../lib/download";
+import { exportTableSql } from "../lib/dump";
 import type { ColumnEntry, TableDataResult } from "../types";
 import { EXPORT_MAX_ROWS } from "../types";
 import DataGrid from "./DataGrid";
@@ -283,6 +284,24 @@ export default function TableDataView({ schema, table }: Props) {
     }
   }
 
+  /** Export table DDL + INSERTs as .sql (single-table dump). */
+  async function handleExportSql() {
+    if (!schema || !table || !data || exporting) return;
+    setExporting(true);
+    setMutError(null);
+    try {
+      const { sql, rows } = await exportTableSql(schema, table, true);
+      await downloadTextFile(`${schema}_${table}.sql`, sql, "text/sql;charset=utf-8");
+      if (data.total > rows) {
+        setMutError(`Exported DDL + first ${rows.toLocaleString()} of ${data.total.toLocaleString()} rows (cap).`);
+      }
+    } catch (e) {
+      setMutError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const btn =
     "flex h-8 items-center gap-1.5 rounded-lg border border-edge bg-white/5 px-2.5 text-xs text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40";
   const iconBtn =
@@ -349,7 +368,15 @@ export default function TableDataView({ schema, table }: Props) {
           title={data && data.total > EXPORT_MAX_ROWS ? `Export first ${EXPORT_MAX_ROWS.toLocaleString()} rows as CSV` : "Export table as CSV"}
           className={btn}
         >
-          <Download size={13} /> {exporting ? "Exporting…" : "Export"}
+          <Download size={13} /> {exporting ? "Exporting…" : "CSV"}
+        </button>
+        <button
+          onClick={() => void handleExportSql()}
+          disabled={!data || exporting}
+          title="Export table DDL + INSERTs as .sql"
+          className={btn}
+        >
+          <FileCode size={13} /> SQL
         </button>
         <button
           onClick={() => void openImport()}

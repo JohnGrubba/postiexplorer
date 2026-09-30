@@ -80,6 +80,13 @@ export interface BatchQueryResult {
   execution_ms: number;
 }
 
+export interface TableDdl {
+  schema: string;
+  table: string;
+  kind: string;
+  ddl: string;
+}
+
 export interface ServerInfo {
   version: string;
   uptime: string;

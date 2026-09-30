@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Database,
+  DatabaseBackup,
   DatabaseZap,
   FolderGit2,
   LayoutGrid,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { createTable } from "../lib/api";
 import type { ConnectionProfile, DatabaseEntry, NewColumnDef, SchemaEntry, TableEntry } from "../types";
+import DumpDialog from "./DumpDialog";
 
 interface Props {
   profiles: ConnectionProfile[];
@@ -58,6 +60,7 @@ export default function Sidebar(props: Props) {
   const [open, setOpen] = useState<Record<string, boolean>>({ public: true });
   const [tab, setTab] = useState<"explorer" | "saved">("explorer");
   const [createSchema, setCreateSchema] = useState<string | null>(null);
+  const [showDump, setShowDump] = useState(false);
 
   const f = filter.toLowerCase();
 
@@ -156,6 +159,15 @@ export default function Sidebar(props: Props) {
               <RefreshCw size={12} className={props.loadingTree ? "animate-spin" : ""} />
               {props.loadingTree ? "Loading…" : "Refresh schema"}
             </button>
+            <button
+              onClick={() => setShowDump(true)}
+              disabled={!props.connected || !props.currentDb}
+              title="Export / restore this database as .sql"
+              className="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg border border-edge bg-white/[0.03] text-xs text-slate-300 hover:bg-white/[0.07] disabled:opacity-40"
+            >
+              <DatabaseBackup size={12} />
+              Dump / Restore
+            </button>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -244,6 +256,9 @@ export default function Sidebar(props: Props) {
             props.onRefresh();
           }}
         />
+      )}
+      {showDump && props.currentDb && (
+        <DumpDialog database={props.currentDb} onClose={() => setShowDump(false)} onRestored={() => props.onRefresh()} />
       )}
     </aside>
   );

@@ -10,6 +10,7 @@ import type {
   SchemaPrivileges,
   ServerInfo,
   TableDataResult,
+  TableDdl,
   TableEntry,
   TablePrivileges,
   TestConnectionResult,
@@ -215,6 +216,11 @@ export async function setColumnDefault(
 ): Promise<number> {
   if (!isTauri()) return mock.setColumnDefault(schema, table, column, defaultValue);
   return invoke<number>("set_column_default", { connectionId, schema, table, column, defaultValue });
+}
+
+export async function getTableDdl(schema: string, table: string): Promise<TableDdl> {
+  if (!isTauri()) return mock.getTableDdl(schema, table);
+  return invoke<TableDdl>("get_table_ddl", { connectionId, schema, table });
 }
 
 export { isTauri };

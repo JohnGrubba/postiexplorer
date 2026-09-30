@@ -163,3 +163,14 @@ pub struct NewColumnDef {
     pub default_value: Option<String>,
     pub is_primary: bool,
 }
+
+#[derive(Debug, Serialize)]
+pub struct TableDdl {
+    pub schema: String,
+    pub table: String,
+    /// `table` | `view` | `materialized_view` | `foreign_table` (mirrors TableEntry).
+    pub kind: String,
+    /// One or more `;`-terminated statements: CREATE + ALTERs + INDEXes,
+    /// or `CREATE OR REPLACE VIEW …` for views.
+    pub ddl: String,
+}
