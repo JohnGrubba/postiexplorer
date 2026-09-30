@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
+  Check,
+  Copy,
   Download,
   EyeOff,
   FileCode2,
@@ -19,7 +21,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { getErModel, isTauri } from "../lib/api";
-import type { ErDetailOptions, ErModel, ErRelation, ErTable } from "../types";
+import type { ColumnEntry, ErDetailOptions, ErModel, ErRelation, ErTable } from "../types";
 
 // ── constants ──────────────────────────────────────────────────
 const NODE_W = 272;
@@ -32,6 +34,32 @@ const GAP_Y = 56;
 const GROUP_GAP_X = 150;
 const GROUP_GAP_Y = 110;
 const EMPTY_COLS_PLACEHOLDER_H = 30;
+// World-unit margin around the viewport for culling: keeps panning smooth,
+// hides far off-screen DOM.
+const CULL_MARGIN = 600;
+const EMPTY_SET: Set<string> = new Set();
+
+/** Fire-and-forget clipboard copy with textarea fallback. Returns true on best-effort success. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
 
 const SCHEMA_PALETTE = ["#22d3ee", "#8b5cf6", "#f59e0b", "#34d399", "#fb7185", "#60a5fa", "#facc15", "#2dd4bf"];
 
@@ -166,8 +194,12 @@ function separateOverlaps(
 ) {
   const keys = Object.keys(pos);
   if (keys.length < 2) return;
+  // Large diagrams: O(n²·iter) gets expensive fast — skip or heavily cap.
+  // Grid/schema/auto blocks are already non-overlapping, so this is only polish.
+  if (keys.length > 350) return;
+  const capped = keys.length > 200 ? Math.min(iterations, 10) : keys.length > 120 ? Math.min(iterations, 20) : iterations;
   const sorted = [...keys].sort();
-  for (let it = 0; it < iterations; it++) {
+  for (let it = 0; it < capped; it++) {
     let moved = false;
     for (let i = 0; i < sorted.length; i++) {
       for (let j = i + 1; j < sorted.length; j++) {
@@ -435,6 +467,181 @@ function Toggle({
   );
 }
 
+// ── memoized table node ────────────────────────────────────────
+// Memoized so panning / dragging one table doesn't re-render every other
+// table: siblings keep identical prop references and bail out via memo.
+const ErNode = memo(function ErNode({
+  table,
+  tableKey,
+  pos,
+  cols,
+  hiddenCount,
+  accent,
+  isSel,
+  isHovered,
+  isDimmed,
+  fkCols,
+  opts,
+  copiedKey,
+  onNodeMouseDown,
+  onHover,
+  onSelect,
+  onCopy,
+  onShowAll,
+}: {
+  table: ErTable;
+  tableKey: string;
+  pos: Pos;
+  cols: ColumnEntry[];
+  hiddenCount: number;
+  accent: string;
+  isSel: boolean;
+  isHovered: boolean;
+  isDimmed: boolean;
+  fkCols: Set<string>;
+  opts: ErDetailOptions;
+  copiedKey: string | null;
+  onNodeMouseDown: (e: React.MouseEvent, key: string) => void;
+  onHover: (key: string | null) => void;
+  onSelect: (key: string) => void;
+  onCopy: (text: string, key: string) => void;
+  onShowAll: () => void;
+}) {
+  const rh = rowHeight(opts);
+  const isView = table.kind !== "table";
+  const qualified = `${table.schema}.${table.name}`;
+  const tableCopyKey = `table:${qualified}`;
+  return (
+    <div
+      className={`absolute left-0 top-0 ${isDimmed ? "opacity-30 saturate-50" : ""}`}
+      style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, width: NODE_W, willChange: "transform" }}
+      onMouseDown={(e) => onNodeMouseDown(e, tableKey)}
+      onMouseEnter={() => onHover(tableKey)}
+      onMouseLeave={() => onHover(null)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect(tableKey);
+      }}
+    >
+      <div
+        className={`overflow-hidden rounded-2xl border bg-[#0d1424] shadow-[0_8px_24px_rgba(0,0,0,0.35)] ${
+          isSel ? "border-neon/70 shadow-glow" : isHovered ? "border-slate-400/50" : "border-edge"
+        }`}
+      >
+        <div className="h-[3px] w-full" style={{ background: `linear-gradient(90deg, ${accent}, transparent)` }} />
+        <div className="px-3 pb-2 pt-2">
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: accent }} />
+            <span className="truncate font-mono text-[10px] uppercase tracking-wider text-slate-500">{table.schema}</span>
+            <span
+              className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                isView ? "bg-violet2/15 text-violet-300" : "bg-neon/10 text-neon"
+              }`}
+            >
+              {table.kind === "materialized_view" ? "matview" : table.kind === "foreign_table" ? "foreign" : table.kind}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-baseline gap-2">
+            <button
+              className="group/name flex min-w-0 cursor-pointer items-center gap-1 truncate text-left text-[14px] font-bold text-white hover:text-neon"
+              title={`Click to copy table name: ${qualified}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopy(qualified, tableCopyKey);
+              }}
+            >
+              <span className="truncate">{table.name}</span>
+              <span className="shrink-0 opacity-0 transition-opacity group-hover/name:opacity-100">
+                {copiedKey === tableCopyKey ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} className="text-slate-500" />}
+              </span>
+            </button>
+          </div>
+          {opts.showRowCounts && (
+            <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-500">
+              <span>≈ {table.rows_estimate.toLocaleString()} rows</span>
+              <span className="text-slate-700">·</span>
+              <span>{table.size_pretty}</span>
+              <span className="text-slate-700">·</span>
+              <span>{opts.relationsOnly && hiddenCount > 0 ? `${cols.length}/${table.columns.length} cols` : `${table.columns.length} cols`}</span>
+            </div>
+          )}
+        </div>
+        <div className="border-t border-white/[0.06]">
+          {cols.map((c) => {
+            const isPk = c.is_primary;
+            const isFk = fkCols.has(c.name);
+            const colCopyKey = `${tableKey}:${c.name}`;
+            return (
+              <button
+                key={c.name}
+                className="flex w-full cursor-pointer items-center gap-1.5 border-b border-white/[0.04] px-3 text-left last:border-0 hover:bg-white/[0.04]"
+                style={{ height: rh }}
+                title={`Click to copy column name: ${c.name} (${c.data_type}${c.is_nullable ? "" : " NOT NULL"}${c.default_value ? ` DEFAULT ${c.default_value}` : ""})`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCopy(c.name, colCopyKey);
+                }}
+              >
+                {isPk ? (
+                  <KeyRound size={11} className="shrink-0 text-amber-300" />
+                ) : isFk ? (
+                  <Link2 size={11} className="shrink-0 text-neon" />
+                ) : (
+                  <span className="w-[11px] shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-slate-100">
+                  <span className="flex items-center gap-1">
+                    <span className="truncate">{c.name}</span>
+                    {copiedKey === colCopyKey && <Check size={11} className="shrink-0 text-emerald-400" />}
+                  </span>
+                  {opts.showDefaults && c.default_value && (
+                    <span className="block truncate text-[10px] font-normal text-slate-500">= {c.default_value}</span>
+                  )}
+                </span>
+                {opts.showTypes && (
+                  <span className="max-w-[86px] shrink-0 truncate font-mono text-[10.5px] text-neon/80">{shortType(c.data_type)}</span>
+                )}
+                {opts.showNullable && (
+                  <span
+                    title={c.is_nullable ? "nullable" : "NOT NULL"}
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.is_nullable ? "bg-amber-400/70" : "bg-emerald-400/80"}`}
+                  />
+                )}
+                {(isPk || isFk) && (
+                  <span className="flex shrink-0 gap-0.5">
+                    {isPk && <span className="rounded bg-amber-400/15 px-1 text-[8.5px] font-bold text-amber-300">PK</span>}
+                    {isFk && <span className="rounded bg-neon/15 px-1 text-[8.5px] font-bold text-neon">FK</span>}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {cols.length === 0 && (
+            <div
+              className="flex items-center px-3 font-mono text-[10.5px] italic text-slate-500"
+              style={{ height: EMPTY_COLS_PLACEHOLDER_H }}
+            >
+              no key columns — {table.columns.length} hidden
+            </div>
+          )}
+          {hiddenCount > 0 && cols.length > 0 && (
+            <button
+              className="flex w-full items-center justify-center gap-1 px-3 py-1 font-mono text-[10px] text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-300"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowAll();
+              }}
+              title={`Show all ${table.columns.length} columns`}
+            >
+              +{hiddenCount} more column{hiddenCount === 1 ? "" : "s"} — show all
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 // ── main component ─────────────────────────────────────────────
 export default function ErDiagramView({ connected }: { connected: boolean }) {
   const [model, setModel] = useState<ErModel | null>(null);
@@ -451,12 +658,94 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [hoveredRel, setHoveredRel] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedName, setCopiedName] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<null | (
     | { kind: "pan"; startX: number; startY: number; origX: number; origY: number }
     | { kind: "node"; key: string; offsetX: number; offsetY: number }
   )>(null);
+  // True once the pointer moved enough to count as a drag (not a click).
+  // Used to suppress click-to-copy after dragging a node / panning.
+  const movedRef = useRef(false);
+  const downAtRef = useRef({ x: 0, y: 0 });
+  // rAF-throttled pending updates so mousemove (which can fire >120Hz)
+  // collapses to at most one React render per frame.
+  const panRafRef = useRef<number | null>(null);
+  const nodeRafRef = useRef<number | null>(null);
+  const pendingViewRef = useRef<{ x: number; y: number; k: number } | null>(null);
+  const pendingPosRef = useRef<{ key: string; x: number; y: number } | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const positionsRef = useRef(positions);
+  positionsRef.current = positions;
+
+  // Track canvas pixel size for viewport culling.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const update = () => setCanvasSize((prev) => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      return prev.w === w && prev.h === h ? prev : { w, h };
+    });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // End any in-progress drag on window mouse-up (pointer may leave canvas).
+  useEffect(() => {
+    const up = () => {
+      dragRef.current = null;
+      if (panRafRef.current != null) {
+        cancelAnimationFrame(panRafRef.current);
+        panRafRef.current = null;
+      }
+      if (nodeRafRef.current != null) {
+        cancelAnimationFrame(nodeRafRef.current);
+        nodeRafRef.current = null;
+      }
+      if (pendingViewRef.current) {
+        setView(pendingViewRef.current);
+        pendingViewRef.current = null;
+      }
+      if (pendingPosRef.current) {
+        const p = pendingPosRef.current;
+        pendingPosRef.current = null;
+        setPositions((prev) => ({ ...prev, [p.key]: { x: p.x, y: p.y } }));
+      }
+      // Reset click-vs-drag latch on next tick so click handlers (which run
+      // before mouseup in some orders) can still read it. Use timeout 0.
+      const wasMoved = movedRef.current;
+      if (wasMoved) setTimeout(() => { movedRef.current = false; }, 0);
+    };
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  const copyName = useCallback(async (text: string, key?: string) => {
+    // Suppress copy when this click ended a drag.
+    if (movedRef.current) return;
+    await copyText(text);
+    setCopiedName(text);
+    setCopiedKey(key ?? text);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => {
+      setCopiedName(null);
+      setCopiedKey(null);
+    }, 1400);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(OPTIONS_KEY, JSON.stringify(opts));
@@ -512,9 +801,12 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     return s;
   }, [model]);
 
+  // Defer search so typing stays responsive with hundreds of tables.
+  const deferredSearch = useDeferredValue(search);
+
   const filtered = useMemo(() => {
     if (!model) return [];
-    const q = search.trim().toLowerCase();
+    const q = deferredSearch.trim().toLowerCase();
     return model.tables.filter((t) => {
       if (!opts.showViews && (t.kind === "view" || t.kind === "materialized_view")) return false;
       if (schemaFilter !== "all" && t.schema !== schemaFilter) return false;
@@ -523,7 +815,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
         return false;
       return true;
     });
-  }, [model, opts.showViews, opts.showIsolated, schemaFilter, search, connectedTables]);
+  }, [model, opts.showViews, opts.showIsolated, schemaFilter, deferredSearch, connectedTables]);
 
   const tableHeights = useMemo(() => {
     const m = new Map<string, number>();
@@ -538,6 +830,50 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       (r) => keys.has(tkey(r.source_schema, r.source_table)) && keys.has(tkey(r.target_schema, r.target_table)),
     );
   }, [model, filtered]);
+
+  // Pre-compute per-table render data once per filter/options change so
+  // memoized nodes keep stable `cols` references across pan/zoom frames.
+  const tableRenderData = useMemo(() => {
+    const m = new Map<string, { cols: ColumnEntry[]; hiddenCount: number }>();
+    for (const t of filtered) {
+      const cols = displayColumns(t, relatedCols, opts);
+      m.set(tkey(t.schema, t.name), { cols, hiddenCount: t.columns.length - cols.length });
+    }
+    return m;
+  }, [filtered, opts, relatedCols]);
+
+  // ── viewport culling: only mount DOM for tables intersecting the view ──
+  const culled = useMemo(() => {
+    if (filtered.length === 0) return { tables: [] as ErTable[], keys: new Set<string>() };
+    const { w, h } = canvasSize;
+    // Before first measure (or tiny canvas) render everything to allow fitView.
+    if (w < 10 || h < 10) {
+      return { tables: filtered, keys: new Set(filtered.map((t) => tkey(t.schema, t.name))) };
+    }
+    const { x, y, k } = view;
+    const x0 = (0 - x) / k - CULL_MARGIN;
+    const y0 = (0 - y) / k - CULL_MARGIN;
+    const x1 = (w - x) / k + CULL_MARGIN;
+    const y1 = (h - y) / k + CULL_MARGIN;
+    const tables: ErTable[] = [];
+    const keys = new Set<string>();
+    for (const t of filtered) {
+      const key = tkey(t.schema, t.name);
+      // Always keep the selected/hovered table mounted so highlight edges stay visible.
+      if (key === selected || key === hovered) {
+        tables.push(t);
+        keys.add(key);
+        continue;
+      }
+      const p = positions[key];
+      if (!p) continue;
+      const th = tableHeights.get(key) ?? 300;
+      if (p.x + NODE_W < x0 || p.x > x1 || p.y + th < y0 || p.y > y1) continue;
+      tables.push(t);
+      keys.add(key);
+    }
+    return { tables, keys };
+  }, [filtered, canvasSize, view, positions, tableHeights, selected, hovered]);
 
   // (re)layout when the table set, layout mode, or compact mode changes — manual drags persist afterwards
   useEffect(() => {
@@ -615,7 +951,12 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     return () => clearTimeout(t);
   }, [model, filtered, positions, layoutMode, opts.relationsOnly, fitView]);
 
-  // ── pan / zoom / drag ──
+  // ── pan / zoom / drag (rAF-throttled, selection-safe) ──
+  function clearTextSelection() {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) sel.removeAllRanges();
+  }
+
   function onWheel(e: React.WheelEvent) {
     const el = canvasRef.current;
     if (!el) return;
@@ -633,42 +974,108 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
   function onCanvasMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
-    dragRef.current = { kind: "pan", startX: e.clientX, startY: e.clientY, origX: view.x, origY: view.y };
+    // Prevent native text-selection drag; canvas is select-none anyway.
+    e.preventDefault();
+    clearTextSelection();
+    movedRef.current = false;
+    downAtRef.current = { x: e.clientX, y: e.clientY };
+    dragRef.current = { kind: "pan", startX: e.clientX, startY: e.clientY, origX: viewRef.current.x, origY: viewRef.current.y };
   }
 
-  function onNodeMouseDown(e: React.MouseEvent, key: string) {
+  const onNodeMouseDown = useCallback((e: React.MouseEvent, key: string) => {
     e.stopPropagation();
-    const p = positions[key];
-    if (!p) return;
+    e.preventDefault();
+    clearTextSelection();
+    const p = positionsRef.current[key];
+    // Ref-mirrored view/positions keep this handler stable for memo.
+    const v = viewRef.current;
     const el = canvasRef.current;
-    if (!el) return;
+    if (!p || !el) return;
     const rect = el.getBoundingClientRect();
-    const wx = (e.clientX - rect.left - view.x) / view.k;
-    const wy = (e.clientY - rect.top - view.y) / view.k;
+    const wx = (e.clientX - rect.left - v.x) / v.k;
+    const wy = (e.clientY - rect.top - v.y) / v.k;
+    movedRef.current = false;
+    downAtRef.current = { x: e.clientX, y: e.clientY };
     dragRef.current = { kind: "node", key, offsetX: wx - p.x, offsetY: wy - p.y };
     setSelected(key);
+  }, []);
+
+  function flushPendingView() {
+    if (panRafRef.current != null) return;
+    panRafRef.current = requestAnimationFrame(() => {
+      panRafRef.current = null;
+      if (pendingViewRef.current) {
+        const next = pendingViewRef.current;
+        pendingViewRef.current = null;
+        setView(next);
+      }
+    });
+  }
+
+  function flushPendingPos() {
+    if (nodeRafRef.current != null) return;
+    nodeRafRef.current = requestAnimationFrame(() => {
+      nodeRafRef.current = null;
+      if (pendingPosRef.current) {
+        const p = pendingPosRef.current;
+        pendingPosRef.current = null;
+        setPositions((prev) => {
+          const cur = prev[p.key];
+          if (cur && cur.x === p.x && cur.y === p.y) return prev;
+          return { ...prev, [p.key]: { x: p.x, y: p.y } };
+        });
+      }
+    });
   }
 
   function onCanvasMouseMove(e: React.MouseEvent) {
     const d = dragRef.current;
     if (!d) return;
+    // Latch drag-vs-click: beyond ~4px it's a drag, clicks won't copy.
+    if (!movedRef.current) {
+      const dx = e.clientX - downAtRef.current.x;
+      const dy = e.clientY - downAtRef.current.y;
+      if (dx * dx + dy * dy > 16) movedRef.current = true;
+    }
+    if (movedRef.current) clearTextSelection();
     if (d.kind === "pan") {
-      setView((v) => ({ ...v, x: d.origX + (e.clientX - d.startX), y: d.origY + (e.clientY - d.startY) }));
+      const v = viewRef.current;
+      pendingViewRef.current = { ...v, x: d.origX + (e.clientX - d.startX), y: d.origY + (e.clientY - d.startY) };
+      flushPendingView();
     } else {
       const el = canvasRef.current;
       if (!el) return;
+      const v = viewRef.current;
       const rect = el.getBoundingClientRect();
-      const wx = (e.clientX - rect.left - view.x) / view.k;
-      const wy = (e.clientY - rect.top - view.y) / view.k;
+      const wx = (e.clientX - rect.left - v.x) / v.k;
+      const wy = (e.clientY - rect.top - v.y) / v.k;
       const nx = Math.round(wx - d.offsetX);
       const ny = Math.round(wy - d.offsetY);
-      setPositions((prev) => ({ ...prev, [d.key]: { x: nx, y: ny } }));
+      pendingPosRef.current = { key: d.key, x: nx, y: ny };
+      flushPendingPos();
     }
   }
 
   function endDrag() {
+    // Window mouseup listener does the real cleanup + flush; this keeps
+    // canvas-level handlers (mouseleave) from dropping the drag early.
+    // Only clear here if no buttons are held.
     dragRef.current = null;
   }
+
+  const onHoverNode = useCallback((key: string | null) => {
+    setHovered((prev) => (prev === key ? prev : key));
+  }, []);
+
+  const onSelectNode = useCallback((key: string) => {
+    if (movedRef.current) return;
+    setSelected(key);
+  }, []);
+
+  const onShowAllColumns = useCallback(() => {
+    fittedKey.current = null;
+    setOpts((o) => ({ ...o, relationsOnly: false }));
+  }, []);
 
   // ── edges (side-aware so lines leave the facing sides, plus self-loops) ──
   const edges = useMemo(() => {
@@ -682,8 +1089,8 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       const sp = positions[sk];
       const tp = positions[tk];
       if (!sTable || !tTable || !sp || !tp) return null;
-      const sCols = displayColumns(sTable, relatedCols, opts);
-      const tCols = sk === tk ? sCols : displayColumns(tTable, relatedCols, opts);
+      const sCols = tableRenderData.get(sk)?.cols ?? displayColumns(sTable, relatedCols, opts);
+      const tCols = sk === tk ? sCols : (tableRenderData.get(tk)?.cols ?? displayColumns(tTable, relatedCols, opts));
       let sIdx = sCols.findIndex((c) => c.name === r.source_column);
       let tIdx = tCols.findIndex((c) => c.name === r.target_column);
       // Hidden in compact mode (shouldn't happen for FK cols) — fall back to header edge.
@@ -726,7 +1133,20 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       const midY = (my1 + my2) / 2;
       return { r, i, d, x1, y1: my1, x2, y2: my2, midX, midY, sk, tk };
     });
-  }, [visibleRelations, filtered, positions, opts, relatedCols]);
+  }, [visibleRelations, filtered, positions, opts, relatedCols, tableRenderData]);
+
+  // Only mount SVG for edges touching the culled viewport. When zoomed out
+  // this is everything; when zoomed in it skips far off-screen edges.
+  const renderedEdges = useMemo(() => {
+    if (edges.length === 0) return [] as typeof edges;
+    // Small diagrams: no need to filter.
+    if (culled.keys.size >= filtered.length) return edges;
+    return edges.filter((e) => e && (culled.keys.has(e.sk) || culled.keys.has(e.tk)));
+  }, [edges, culled, filtered.length]);
+
+  // Relation labels double the SVG DOM — with many edges only label the
+  // hovered / highlighted ones.
+  const labelAllEdges = visibleRelations.length <= 150;
 
   // ── export ──
   function exportSvg() {
@@ -781,16 +1201,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
   async function copyMermaid() {
     const text = buildMermaid(filtered, visibleRelations);
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
+    await copyText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
   }
@@ -829,8 +1240,6 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       </div>
     );
   }
-
-  const dimmed = (key: string) => (highlight && !highlight.tables.has(key) ? "opacity-30 saturate-50" : "");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -872,8 +1281,10 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
         <div className="hidden items-center gap-1.5 rounded-full bg-white/[0.04] px-2.5 py-1 font-mono text-[11px] text-slate-400 xl:flex">
           <Table2 size={12} className="text-neon" /> {filtered.length} tables
+          {culled.tables.length < filtered.length && <span className="text-slate-500">({culled.tables.length} in view)</span>}
           <span className="text-slate-600">·</span>
           <Link2 size={12} className="text-violet2" /> {visibleRelations.length} rels
+          {renderedEdges.length < edges.length && <span className="text-slate-500">({renderedEdges.length} in view)</span>}
         </div>
 
         <select
@@ -938,8 +1349,8 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
         </div>
       )}
 
-      {/* canvas */}
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-void">
+      {/* canvas — select-none so pan/drag never creates a blue text selection */}
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-void select-none">
         {/* dotted backdrop */}
         <div
           className="pointer-events-none absolute inset-0 opacity-60"
@@ -949,23 +1360,28 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
         <div
           ref={canvasRef}
-          className="absolute inset-0 cursor-grab overflow-hidden active:cursor-grabbing"
+          className="absolute inset-0 cursor-grab select-none overflow-hidden active:cursor-grabbing"
+          style={{ userSelect: "none", WebkitUserSelect: "none", touchAction: "none" }}
           onWheel={onWheel}
           onMouseDown={onCanvasMouseDown}
           onMouseMove={onCanvasMouseMove}
           onMouseUp={endDrag}
           onMouseLeave={() => {
-            endDrag();
             setHovered(null);
           }}
-          onClick={() => setSelected(null)}
+          onClick={() => {
+            // Don't clear selection when the click ended a pan-drag.
+            if (movedRef.current) return;
+            setSelected(null);
+          }}
+          onDragStart={(e) => e.preventDefault()}
         >
           <div
-            className="absolute left-0 top-0"
-            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`, transformOrigin: "0 0" }}
+            className="absolute left-0 top-0 select-none"
+            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`, transformOrigin: "0 0", willChange: "transform", userSelect: "none", WebkitUserSelect: "none" }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* edges */}
+            {/* edges — culled to viewport, glow only on hover */}
             <svg
               className="absolute left-0 top-0 overflow-visible"
               width={10}
@@ -987,10 +1403,12 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
                   </feMerge>
                 </filter>
               </defs>
-              {edges.map((e) => {
+              {renderedEdges.map((e) => {
                 if (!e) return null;
-                const isActive = hoveredRel === e.i || (highlight && highlight.rels.has(e.i));
+                const isHoveredEdge = hoveredRel === e.i;
+                const isActive = isHoveredEdge || (highlight && highlight.rels.has(e.i));
                 const isDim = highlight && !highlight.rels.has(e.i);
+                const showLabel = opts.showRelationLabels && view.k > 0.45 && (labelAllEdges || isActive);
                 return (
                   <g key={e.i} opacity={isDim ? 0.18 : 1}>
                     {/* hit area */}
@@ -1013,13 +1431,13 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
                       strokeOpacity={isActive ? 0.95 : 0.55}
                       strokeWidth={isActive ? 2.2 : 1.5}
                       markerEnd={isActive ? "url(#er-arrow)" : "url(#er-arrow-dim)"}
-                      filter={isActive ? "url(#er-glow)" : undefined}
+                      filter={isHoveredEdge ? "url(#er-glow)" : undefined}
                       strokeDasharray={isActive ? undefined : "1 0"}
                       className="pointer-events-none"
                     />
                     {/* FK dot at source */}
                     <circle cx={e.x1} cy={e.y1} r={isActive ? 4 : 3} fill={isActive ? "#22d3ee" : "#7c8aa5"} className="pointer-events-none" />
-                    {opts.showRelationLabels && view.k > 0.45 && (
+                    {showLabel && (
                       <g className="pointer-events-none">
                         <rect
                           x={e.midX - 62}
@@ -1041,129 +1459,37 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
               })}
             </svg>
 
-            {/* nodes */}
-            {filtered.map((t) => {
+            {/* nodes — viewport-culled + memoized */}
+            {culled.tables.map((t) => {
               const key = tkey(t.schema, t.name);
               const p = positions[key];
               if (!p) return null;
-              const cols = displayColumns(t, relatedCols, opts);
-              const rh = rowHeight(opts);
+              const data = tableRenderData.get(key);
+              const cols = data?.cols ?? [];
+              const hiddenCount = data?.hiddenCount ?? 0;
               const accent = opts.colorBySchema ? schemaColor(t.schema, schemas) : "#22d3ee";
-              const isSel = selected === key;
-              const fkCols = fkByTable.get(key) ?? new Set<string>();
-              const isView = t.kind !== "table";
-              const hiddenCount = t.columns.length - cols.length;
+              const fkCols = fkByTable.get(key) ?? EMPTY_SET;
               return (
-                <div
+                <ErNode
                   key={key}
-                  className={`absolute transition-opacity ${dimmed(key)}`}
-                  style={{ left: p.x, top: p.y, width: NODE_W }}
-                  onMouseDown={(e) => onNodeMouseDown(e, key)}
-                  onMouseEnter={() => setHovered(key)}
-                  onMouseLeave={() => setHovered(null)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelected(key);
-                  }}
-                >
-                  <div
-                    className={`overflow-hidden rounded-2xl border bg-panel/95 shadow-card backdrop-blur transition ${
-                      isSel ? "border-neon/70 shadow-glow" : hovered === key ? "border-slate-400/50" : "border-edge"
-                    }`}
-                  >
-                    <div className="h-[3px] w-full" style={{ background: `linear-gradient(90deg, ${accent}, transparent)` }} />
-                    <div className="px-3 pb-2 pt-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: accent }} />
-                        <span className="truncate font-mono text-[10px] uppercase tracking-wider text-slate-500">{t.schema}</span>
-                        <span
-                          className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
-                            isView ? "bg-violet2/15 text-violet-300" : "bg-neon/10 text-neon"
-                          }`}
-                        >
-                          {t.kind === "materialized_view" ? "matview" : t.kind === "foreign_table" ? "foreign" : t.kind}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 flex items-baseline gap-2">
-                        <span className="truncate text-[14px] font-bold text-white" title={`${t.schema}.${t.name}`}>
-                          {t.name}
-                        </span>
-                      </div>
-                      {opts.showRowCounts && (
-                        <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-slate-500">
-                          <span>≈ {t.rows_estimate.toLocaleString()} rows</span>
-                          <span className="text-slate-700">·</span>
-                          <span>{t.size_pretty}</span>
-                          <span className="text-slate-700">·</span>
-                          <span>{opts.relationsOnly && hiddenCount > 0 ? `${cols.length}/${t.columns.length} cols` : `${t.columns.length} cols`}</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="border-t border-white/[0.06]">
-                      {cols.map((c) => {
-                        const isPk = c.is_primary;
-                        const isFk = fkCols.has(c.name);
-                        return (
-                          <div
-                            key={c.name}
-                            className="flex items-center gap-1.5 border-b border-white/[0.04] px-3 last:border-0 hover:bg-white/[0.04]"
-                            style={{ height: rh }}
-                            title={`${c.name} ${c.data_type}${c.is_nullable ? "" : " NOT NULL"}${c.default_value ? ` DEFAULT ${c.default_value}` : ""}`}
-                          >
-                            {isPk ? (
-                              <KeyRound size={11} className="shrink-0 text-amber-300" />
-                            ) : isFk ? (
-                              <Link2 size={11} className="shrink-0 text-neon" />
-                            ) : (
-                              <span className="w-[11px] shrink-0" />
-                            )}
-                            <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-slate-100">
-                              {c.name}
-                              {opts.showDefaults && c.default_value && (
-                                <span className="block truncate text-[10px] font-normal text-slate-500">= {c.default_value}</span>
-                              )}
-                            </span>
-                            {opts.showTypes && (
-                              <span className="max-w-[86px] shrink-0 truncate font-mono text-[10.5px] text-neon/80">{shortType(c.data_type)}</span>
-                            )}
-                            {opts.showNullable && (
-                              <span
-                                title={c.is_nullable ? "nullable" : "NOT NULL"}
-                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${c.is_nullable ? "bg-amber-400/70" : "bg-emerald-400/80"}`}
-                              />
-                            )}
-                            {(isPk || isFk) && (
-                              <span className="flex shrink-0 gap-0.5">
-                                {isPk && <span className="rounded bg-amber-400/15 px-1 text-[8.5px] font-bold text-amber-300">PK</span>}
-                                {isFk && <span className="rounded bg-neon/15 px-1 text-[8.5px] font-bold text-neon">FK</span>}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                      {cols.length === 0 && (
-                        <div
-                          className="flex items-center px-3 font-mono text-[10.5px] italic text-slate-500"
-                          style={{ height: EMPTY_COLS_PLACEHOLDER_H }}
-                        >
-                          no key columns — {t.columns.length} hidden
-                        </div>
-                      )}
-                      {hiddenCount > 0 && cols.length > 0 && (
-                        <button
-                          className="flex w-full items-center justify-center gap-1 px-3 py-1 font-mono text-[10px] text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-300"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpts((o) => ({ ...o, relationsOnly: false }));
-                          }}
-                          title={`Show all ${t.columns.length} columns`}
-                        >
-                          +{hiddenCount} more column{hiddenCount === 1 ? "" : "s"} — show all
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                  table={t}
+                  tableKey={key}
+                  pos={p}
+                  cols={cols}
+                  hiddenCount={hiddenCount}
+                  accent={accent}
+                  isSel={selected === key}
+                  isHovered={hovered === key}
+                  isDimmed={!!(highlight && !highlight.tables.has(key))}
+                  fkCols={fkCols}
+                  opts={opts}
+                  copiedKey={copiedKey}
+                  onNodeMouseDown={onNodeMouseDown}
+                  onHover={onHoverNode}
+                  onSelect={onSelectNode}
+                  onCopy={copyName}
+                  onShowAll={onShowAllColumns}
+                />
               );
             })}
           </div>
@@ -1188,12 +1514,27 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
         {/* legend + selection */}
         <div className="absolute bottom-4 right-4 flex max-w-[320px] flex-col items-end gap-2">
+          {copiedName && (
+            <div className="flex items-center gap-1.5 rounded-xl border border-emerald-400/30 bg-[#0d1424] px-3 py-1.5 font-mono text-[11px] text-emerald-300 shadow-card">
+              <Check size={12} /> Copied <span className="font-semibold">{copiedName}</span>
+            </div>
+          )}
           {selected && (
-            <div className="w-full rounded-xl border border-neon/30 bg-panel/95 p-2.5 shadow-glow backdrop-blur">
+            <div className="w-full rounded-xl border border-neon/30 bg-[#0d1424] p-2.5 shadow-glow">
               <div className="flex items-center gap-1.5">
-                <ZoomIn size={12} className="text-neon" />
-                <span className="truncate font-mono text-[11px] font-semibold text-white">{selected}</span>
-                <button onClick={() => setSelected(null)} className="ml-auto text-slate-500 hover:text-white">
+                <ZoomIn size={12} className="shrink-0 text-neon" />
+                <span className="truncate font-mono text-[11px] font-semibold text-white" title={selected}>{selected}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyName(selected, `table:${selected}`);
+                  }}
+                  className="ml-auto flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] text-slate-400 hover:bg-white/10 hover:text-white"
+                  title={`Copy table name: ${selected}`}
+                >
+                  {copiedKey === `table:${selected}` ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />} Copy
+                </button>
+                <button onClick={() => setSelected(null)} className="shrink-0 text-slate-500 hover:text-white">
                   <X size={12} />
                 </button>
               </div>
@@ -1227,8 +1568,8 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
       {/* footer */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-edge bg-panel px-3 py-1.5 text-[11px] text-slate-500">
-        <span className="hidden md:inline">Drag background to pan · scroll to zoom · drag tables to arrange · click a table to isolate its links · Relayout clears manual drags</span>
-        <span className="md:hidden">Pan, zoom &amp; drag tables to explore</span>
+        <span className="hidden md:inline">Drag background to pan · scroll to zoom · drag tables to arrange · click a table to isolate · click table/column names to copy · Relayout clears manual drags</span>
+        <span className="md:hidden">Pan, zoom &amp; drag tables · tap names to copy</span>
         <div className="flex-1" />
         <button onClick={load} className="flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-white/5 hover:text-slate-300">
           {loading ? <Loader2 size={12} className="animate-spin" /> : null} Refresh
