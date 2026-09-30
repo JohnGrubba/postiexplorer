@@ -55,8 +55,8 @@ is not supported; build on each OS (or CI, see §5).
 
 ```
 releases/
-  windows/PostiExplorer_<version>_x64-setup.exe      ← installer, x64 (single .exe)
-  windows/PostiExplorer_<version>_aarch64-setup.exe  ← installer, ARM64
+  windows/PostiExplorer_x64-setup.exe      ← installer, x64 (single .exe)
+  windows/PostiExplorer_aarch64-setup.exe  ← installer, ARM64
   windows/*.msi
   linux/*.AppImage                             ← single file, chmod +x to run
   linux/*.deb  linux/*.rpm
@@ -64,7 +64,10 @@ releases/
   portable/postiexplorer(.exe)                 ← raw single-file binary
 ```
 
-The `<version>` in installer names comes from `package.json` — see §8.
+Bundle file names are versionless on purpose (`build-release.mjs` strips
+the version via `scripts/artifact-names.mjs`), so direct
+`releases/latest/download/<file>` links never break. Set
+`KEEP_VERSIONED_NAMES=1` to keep Tauri's original versioned names.
 
 Raw Tauri output stays under `src-tauri/target/release/` (`postiexplorer(.exe)`)
 and `.../bundle/` — `releases/` is just the collected, shippable copy.
@@ -151,10 +154,15 @@ What follows automatically on every `npm run build` / `npm run dist` /
 |---|---|
 | `src-tauri/tauri.conf.json` → `version` | = package.json |
 | `src-tauri/Cargo.toml` → `[package] version` | = package.json |
-| Installer/bundle file names (`PostiExplorer_<version>_…`) | derived by Tauri |
-| README.md download links | rewritten to match |
+| Installer/bundle file names (versionless, arch token kept) | `build-release.mjs` strips the version (`KEEP_VERSIONED_NAMES=1` keeps it) |
+| README.md download links | permanent — no version in file names |
 | Header + status bar in the app UI | baked in at build time (`__APP_VERSION__`, see `vite.config.ts`) |
 | `src-tauri/Cargo.lock` (`postiexplorer` entry) | refreshed by cargo itself on the next build |
 
 Check drift without writing anything: `npm run version:check`
 (exits 1 when the files disagree — e.g. after a hand-edit).
+
+Note: the `version` deliberately stays inside the bundle metadata
+(`tauri.conf.json` / `Cargo.toml`) — installers need it for upgrade
+detection, and the app shows it in its header and status bar. Only the
+output file names drop it.

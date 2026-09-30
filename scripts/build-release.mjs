@@ -15,10 +15,17 @@
  *   releases/linux/*.AppImage *.deb *.rpm
  *   releases/macos/*.dmg *.app.tar.gz
  *   releases/portable/postiexplorer*   (raw single-file binary)
+ *
+ * Collected bundle files are renamed to stable, versionless names
+ * (see scripts/artifact-names.mjs), e.g.
+ * `PostiExplorer_0.1.1_x64-setup.exe` → `PostiExplorer_x64-setup.exe`,
+ * so `releases/latest/download/<file>` URLs never break on a version bump.
+ * Set KEEP_VERSIONED_NAMES=1 to keep Tauri's original file names.
  */
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { stableName } from "./artifact-names.mjs";
 
 const ROOT = process.cwd();
 const OUT = join(ROOT, "releases");
@@ -39,12 +46,14 @@ function collect(dir, destSub) {
   if (!existsSync(src)) return 0;
   const dest = join(OUT, destSub);
   mkdirSync(dest, { recursive: true });
+  const keepVersioned = !!process.env.KEEP_VERSIONED_NAMES;
   let n = 0;
   for (const f of readdirSync(src)) {
     const p = join(src, f);
     if (statSync(p).isFile()) {
-      cpSync(p, join(dest, f));
-      console.log(`  collected ${dir}/${f}`);
+      const out = keepVersioned ? f : stableName(f);
+      cpSync(p, join(dest, out));
+      console.log(`  collected ${dir}/${out}${out !== f ? ` (renamed from ${f})` : ""}`);
       n++;
     }
   }

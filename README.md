@@ -18,15 +18,15 @@ Direct downloads from the rolling
 
 | OS | Recommended | Alternative |
 | -- | ----------- | ----------- |
-| Windows x64 | [Installer (`PostiExplorer_0.1.1_x64-setup.exe`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_x64-setup.exe) | [Portable `postiexplorer.exe`](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/postiexplorer.exe) |
-| Windows ARM64 | [Installer (`PostiExplorer_0.1.1_aarch64-setup.exe`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_aarch64-setup.exe) | — |
-| Linux (x64) | [AppImage (`PostiExplorer_0.1.1_amd64.AppImage`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_amd64.AppImage) — `chmod +x` to run | [`.deb` (`PostiExplorer_0.1.1_amd64.deb`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_amd64.deb) |
-| macOS (Apple Silicon) | [`PostiExplorer_0.1.1_aarch64.dmg`](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_0.1.1_aarch64.dmg) | — |
+| Windows x64 | [Installer (`PostiExplorer_x64-setup.exe`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_x64-setup.exe) | [Portable `postiexplorer.exe`](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/postiexplorer.exe) |
+| Windows ARM64 | [Installer (`PostiExplorer_aarch64-setup.exe`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_aarch64-setup.exe) | — |
+| Linux (x64) | [AppImage (`PostiExplorer_amd64.AppImage`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_amd64.AppImage) — `chmod +x` to run | [`.deb` (`PostiExplorer_amd64.deb`)](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_amd64.deb) |
+| macOS (Apple Silicon) | [`PostiExplorer_aarch64.dmg`](https://github.com/JohnGrubba/postiexplorer/releases/latest/download/PostiExplorer_aarch64.dmg) | — |
 
 See the [full file list](https://github.com/JohnGrubba/postiexplorer/releases/latest)
-for everything else. The versions in these links track `package.json`
-automatically — see [BUILD.md §8](BUILD.md#8-versioning-single-source-of-truth).
-Or build locally — see [BUILD.md](BUILD.md).
+for everything else. File names carry no version on purpose, so these links
+stay valid across releases — the running app's version is shown in its
+header and status bar. Or build locally — see [BUILD.md](BUILD.md).
 
 ## Screenshots
 
