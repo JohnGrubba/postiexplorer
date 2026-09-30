@@ -1129,3 +1129,164 @@ async fn dump_ddl_flow() {
         .expect("cleanup parent");
     db::close_connection(&state, &id);
 }
+
+#[tokio::test]
+async fn roles_manager_flow() {
+    use postiexplorer::models::RoleOptions;
+    fn opts() -> RoleOptions {
+        RoleOptions {
+            password: None,
+            can_login: true,
+            superuser: false,
+            create_db: false,
+            create_role: false,
+            inherit: true,
+            replication: false,
+            conn_limit: -1,
+            valid_until: None,
+        }
+    }
+    let state = DbState::default();
+    let id = db::open_connection(&state, profile())
+        .await
+        .expect("connect");
+
+    // Cleanup from previous runs (scoped to our test roles only).
+    for r in [
+        "__px_role_a",
+        "__px_role_b",
+        "__px_role_evil'] ; DROP TABLE public.users; --",
+    ] {
+        let _ = db::op_drop_role(&state, &id, r).await;
+    }
+
+    // Lists carry the current user + superuser flag for up-front gating.
+    let list = db::op_list_roles(&state, &id).await.expect("list roles");
+    assert_eq!(list.current_user, "postgres");
+    assert!(list.is_superuser);
+    assert!(list
+        .roles
+        .iter()
+        .any(|r| r.name == "postgres" && r.can_login));
+
+    // Create with password + connection limit.
+    let mut create = opts();
+    create.password = Some("s3cret!; DROP TABLE x; --".into());
+    create.conn_limit = 5;
+    db::op_create_role(&state, &id, "__px_role_a", create)
+        .await
+        .expect("create role");
+    let after = db::op_list_roles(&state, &id).await.expect("relist");
+    let a = after
+        .roles
+        .iter()
+        .find(|r| r.name == "__px_role_a")
+        .expect("role a");
+    assert!(a.can_login && !a.superuser);
+    assert_eq!(a.conn_limit, 5);
+
+    // Duplicate creation fails with server detail.
+    assert!(db::op_create_role(&state, &id, "__px_role_a", opts())
+        .await
+        .is_err());
+
+    // An injection attempt in the name lands as a quoted identifier:
+    // the role is created, `public.users` still exists.
+    let evil = "__px_role_evil'] ; DROP TABLE public.users; --";
+    db::op_create_role(&state, &id, evil, opts())
+        .await
+        .expect("create evil-named role");
+    let tables = db::op_list_tables(&state, &id, "public")
+        .await
+        .expect("tables intact");
+    assert!(tables.iter().any(|t| t.name == "users"));
+    db::op_drop_role(&state, &id, evil)
+        .await
+        .expect("drop evil-named role");
+
+    // Alter: flip attributes, set + clear expiry.
+    let mut alt = opts();
+    alt.create_db = true;
+    alt.valid_until = Some("2030-01-01 00:00:00+00".into());
+    db::op_alter_role(&state, &id, "__px_role_a", alt)
+        .await
+        .expect("alter role");
+    let altered = db::op_list_roles(&state, &id).await.expect("relist2");
+    let a2 = altered
+        .roles
+        .iter()
+        .find(|r| r.name == "__px_role_a")
+        .expect("role a2");
+    assert!(a2.create_db);
+    assert!(a2.valid_until.as_deref().unwrap_or("").contains("2030"));
+    let mut clear = opts();
+    clear.valid_until = Some(String::new());
+    db::op_alter_role(&state, &id, "__px_role_a", clear)
+        .await
+        .expect("clear expiry");
+    let cleared = db::op_list_roles(&state, &id).await.expect("relist3");
+    assert!(cleared
+        .roles
+        .iter()
+        .find(|r| r.name == "__px_role_a")
+        .expect("role a3")
+        .valid_until
+        .is_none());
+
+    // Validation: empty name, bad limit rejected before SQL.
+    assert!(db::op_create_role(&state, &id, "  ", opts()).await.is_err());
+    let mut bad = opts();
+    bad.conn_limit = -5;
+    assert!(db::op_create_role(&state, &id, "__px_role_b", bad)
+        .await
+        .is_err());
+
+    // Memberships: grant / list both directions / revoke.
+    db::op_create_role(&state, &id, "__px_role_b", opts())
+        .await
+        .expect("create b");
+    db::op_grant_role(&state, &id, "__px_role_a", "__px_role_b")
+        .await
+        .expect("grant");
+    let mem = db::op_get_role_memberships(&state, &id, "__px_role_a")
+        .await
+        .expect("memberships");
+    assert!(
+        mem.members.contains(&"__px_role_b".to_string()),
+        "mem: {mem:?}"
+    );
+    let mem_b = db::op_get_role_memberships(&state, &id, "__px_role_b")
+        .await
+        .expect("memberships b");
+    assert!(
+        mem_b.member_of.contains(&"__px_role_a".to_string()),
+        "mem_b: {mem_b:?}"
+    );
+    db::op_revoke_role(&state, &id, "__px_role_a", "__px_role_b")
+        .await
+        .expect("revoke");
+    let mem2 = db::op_get_role_memberships(&state, &id, "__px_role_a")
+        .await
+        .expect("memberships2");
+    assert!(
+        !mem2.members.contains(&"__px_role_b".to_string()),
+        "mem2: {mem2:?}"
+    );
+    assert!(db::op_get_role_memberships(&state, &id, "no_such_role_xyz")
+        .await
+        .is_err());
+
+    // Guardrail: cannot drop the role we are connected as.
+    let own_err = db::op_drop_role(&state, &id, "postgres")
+        .await
+        .expect_err("drop self must fail");
+    assert!(own_err.contains("postgres"), "got: {own_err}");
+
+    db::op_drop_role(&state, &id, "__px_role_a")
+        .await
+        .expect("drop a");
+    db::op_drop_role(&state, &id, "__px_role_b")
+        .await
+        .expect("drop b");
+    db::close_connection(&state, &id);
+}

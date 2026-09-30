@@ -6,6 +6,9 @@ import type {
   ErModel,
   NewColumnDef,
   QueryResult,
+  RoleListResult,
+  RoleMemberships,
+  RoleOptions,
   SchemaEntry,
   SchemaPrivileges,
   ServerInfo,
@@ -221,6 +224,41 @@ export async function setColumnDefault(
 export async function getTableDdl(schema: string, table: string): Promise<TableDdl> {
   if (!isTauri()) return mock.getTableDdl(schema, table);
   return invoke<TableDdl>("get_table_ddl", { connectionId, schema, table });
+}
+
+export async function listRoles(): Promise<RoleListResult> {
+  if (!isTauri()) return mock.listRoles();
+  return invoke<RoleListResult>("list_roles", { connectionId });
+}
+
+export async function createRole(name: string, options: RoleOptions): Promise<number> {
+  if (!isTauri()) return mock.createRole(name, options);
+  return invoke<number>("create_role", { connectionId, name, options });
+}
+
+export async function alterRole(name: string, options: RoleOptions): Promise<number> {
+  if (!isTauri()) return mock.alterRole(name, options);
+  return invoke<number>("alter_role", { connectionId, name, options });
+}
+
+export async function dropRole(name: string): Promise<number> {
+  if (!isTauri()) return mock.dropRole(name);
+  return invoke<number>("drop_role", { connectionId, name });
+}
+
+export async function getRoleMemberships(name: string): Promise<RoleMemberships> {
+  if (!isTauri()) return mock.getRoleMemberships(name);
+  return invoke<RoleMemberships>("get_role_memberships", { connectionId, name });
+}
+
+export async function grantRole(member: string, target: string): Promise<number> {
+  if (!isTauri()) return mock.grantRole(member, target);
+  return invoke<number>("grant_role", { connectionId, member, target });
+}
+
+export async function revokeRole(member: string, target: string): Promise<number> {
+  if (!isTauri()) return mock.revokeRole(member, target);
+  return invoke<number>("revoke_role", { connectionId, member, target });
 }
 
 export { isTauri };

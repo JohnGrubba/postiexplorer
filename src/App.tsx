@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Braces, Info, Network, Table2 } from "lucide-react";
+import { Braces, Info, Network, Table2, Users } from "lucide-react";
 import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import TableDataView from "./components/TableDataView";
@@ -7,6 +7,7 @@ import StructureView from "./components/StructureView";
 import QueryView from "./components/QueryView";
 import InfoView from "./components/InfoView";
 import ErDiagramView from "./components/ErDiagramView";
+import RolesView from "./components/RolesView";
 import ConnectionDialog from "./components/ConnectionDialog";
 import StatusBar from "./components/StatusBar";
 import { connect, disconnect, getConnectionId, listDatabases, listSchemas, listTables, testConnection } from "./lib/api";
@@ -166,6 +167,7 @@ export default function App() {
     { id: "er", label: "ER Model", icon: Network },
     { id: "query", label: "Query", icon: Braces },
     { id: "info", label: "Server", icon: Info },
+    { id: "roles", label: "Roles", icon: Users },
   ];
 
   // Query state (text, history, last result) is kept per profile + database.
@@ -270,6 +272,7 @@ export default function App() {
                 <QueryView persistKey={queryPersistKey} schema={schema} table={table} />
               </div>
               {tab === "info" && <InfoView key={currentDb ?? "none"} connected={connected} />}
+              {tab === "roles" && <RolesView key={currentDb ?? "none"} connected={connected} />}
             </div>
           </main>
         </div>

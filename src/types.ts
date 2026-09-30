@@ -87,6 +87,56 @@ export interface TableDdl {
   ddl: string;
 }
 
+export interface RoleEntry {
+  name: string;
+  superuser: boolean;
+  inherit: boolean;
+  create_role: boolean;
+  create_db: boolean;
+  can_login: boolean;
+  replication: boolean;
+  conn_limit: number;
+  valid_until: string | null;
+  member_count: number;
+}
+
+export interface RoleListResult {
+  roles: RoleEntry[];
+  current_user: string;
+  is_superuser: boolean;
+}
+
+export interface RoleMemberships {
+  role: string;
+  member_of: string[];
+  members: string[];
+}
+
+/** Attribute set for CREATE / ALTER ROLE (mirrors Rust RoleOptions). */
+export interface RoleOptions {
+  password: string | null;
+  can_login: boolean;
+  superuser: boolean;
+  create_db: boolean;
+  create_role: boolean;
+  inherit: boolean;
+  replication: boolean;
+  conn_limit: number;
+  valid_until: string | null;
+}
+
+export const DEFAULT_ROLE_OPTIONS: RoleOptions = {
+  password: null,
+  can_login: true,
+  superuser: false,
+  create_db: false,
+  create_role: false,
+  inherit: true,
+  replication: false,
+  conn_limit: -1,
+  valid_until: null,
+};
+
 export interface ServerInfo {
   version: string;
   uptime: string;
@@ -97,7 +147,7 @@ export interface ServerInfo {
   max_connections: number;
 }
 
-export type MainTab = "data" | "structure" | "query" | "info" | "er";
+export type MainTab = "data" | "structure" | "query" | "info" | "er" | "roles";
 
 export interface ErRelation {
   constraint_name: string;

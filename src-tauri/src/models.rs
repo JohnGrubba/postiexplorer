@@ -174,3 +174,50 @@ pub struct TableDdl {
     /// or `CREATE OR REPLACE VIEW …` for views.
     pub ddl: String,
 }
+
+#[derive(Debug, Serialize, Clone)]
+pub struct RoleEntry {
+    pub name: String,
+    pub superuser: bool,
+    pub inherit: bool,
+    pub create_role: bool,
+    pub create_db: bool,
+    pub can_login: bool,
+    pub replication: bool,
+    pub conn_limit: i32,
+    pub valid_until: Option<String>,
+    pub member_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoleListResult {
+    pub roles: Vec<RoleEntry>,
+    pub current_user: String,
+    pub is_superuser: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoleMemberships {
+    pub role: String,
+    /// Roles directly granted TO this role (it is a member of these).
+    pub member_of: Vec<String>,
+    /// Roles that are members OF this role (granted this role).
+    pub members: Vec<String>,
+}
+
+/// Attribute set for CREATE / ALTER ROLE. `password`: `None` = leave
+/// unchanged (ALTER) / no password (CREATE); `Some("")` on ALTER also
+/// leaves it unchanged. `valid_until`: `None` = leave unchanged (ALTER)
+/// / no expiry (CREATE); `Some("")` on ALTER clears the expiry.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoleOptions {
+    pub password: Option<String>,
+    pub can_login: bool,
+    pub superuser: bool,
+    pub create_db: bool,
+    pub create_role: bool,
+    pub inherit: bool,
+    pub replication: bool,
+    pub conn_limit: i32,
+    pub valid_until: Option<String>,
+}

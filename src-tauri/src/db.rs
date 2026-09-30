@@ -1961,3 +1961,271 @@ pub async fn op_get_table_ddl(
         ddl,
     })
 }
+
+// ── roles / users: server-level role manager ───────────────
+// PostgreSQL has no separate users — every login is a role with
+// `rolcanlogin`. All writes require superuser / CREATEROLE server-side;
+// errors surface with SQLSTATE detail via `pg_err`.
+
+fn validate_role_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("role name is required".to_string());
+    }
+    if trimmed.len() > 63 {
+        return Err("role name too long (max 63 chars)".to_string());
+    }
+    // Reuse identifier quoting as validation (rejects NUL / empty).
+    quote_ident(trimmed)?;
+    Ok(trimmed.to_string())
+}
+
+fn reject_nul(s: &str, what: &str) -> Result<(), String> {
+    if s.contains('\0') {
+        return Err(format!("{what} contains an invalid (NUL) character"));
+    }
+    Ok(())
+}
+
+/// Render the `WITH …` attribute fragment shared by CREATE / ALTER ROLE.
+/// Passwords and expiry are quoted literals (safe for any content except
+/// NUL); attribute keywords are fixed strings, never interpolated input.
+fn role_options_sql(opts: &RoleOptions, is_alter: bool) -> Result<String, String> {
+    if opts.conn_limit < -1 {
+        return Err("connection limit must be -1 (unlimited) or higher".to_string());
+    }
+    let mut parts = vec![
+        (if opts.can_login { "LOGIN" } else { "NOLOGIN" }).to_string(),
+        (if opts.superuser {
+            "SUPERUSER"
+        } else {
+            "NOSUPERUSER"
+        })
+        .to_string(),
+        (if opts.create_db {
+            "CREATEDB"
+        } else {
+            "NOCREATEDB"
+        })
+        .to_string(),
+        (if opts.create_role {
+            "CREATEROLE"
+        } else {
+            "NOCREATEROLE"
+        })
+        .to_string(),
+        (if opts.inherit { "INHERIT" } else { "NOINHERIT" }).to_string(),
+        (if opts.replication {
+            "REPLICATION"
+        } else {
+            "NOREPLICATION"
+        })
+        .to_string(),
+        format!("CONNECTION LIMIT {}", opts.conn_limit),
+    ];
+    if let Some(pw) = opts.password.as_deref() {
+        // Empty on ALTER = leave unchanged; on CREATE = no password clause.
+        if !pw.is_empty() {
+            reject_nul(pw, "password")?;
+            parts.push(format!("PASSWORD {}", quote_literal(pw)));
+        }
+    }
+    if let Some(v) = opts.valid_until.as_deref() {
+        let t = v.trim();
+        if t.is_empty() {
+            // No syntax to drop an expiry — `infinity` is the idiom.
+            if is_alter {
+                parts.push("VALID UNTIL 'infinity'".to_string());
+            }
+        } else {
+            reject_nul(t, "valid until")?;
+            parts.push(format!("VALID UNTIL {}", quote_literal(t)));
+        }
+    }
+    Ok(parts.join(" "))
+}
+
+pub async fn op_list_roles(state: &DbState, connection_id: &str) -> Result<RoleListResult, String> {
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    let (current_user, is_superuser) = fetch_whoami(&client).await?;
+    let rows = client
+        .query(
+            "SELECT r.rolname, r.rolsuper, r.rolinherit, r.rolcreaterole, r.rolcreatedb,
+                    r.rolcanlogin, r.rolreplication, r.rolconnlimit,
+                    CASE WHEN r.rolvaliduntil IS NULL OR r.rolvaliduntil = 'infinity'::timestamptz
+                         THEN NULL ELSE r.rolvaliduntil::text END,
+                    (SELECT COUNT(*) FROM pg_auth_members m WHERE m.roleid = r.oid)
+             FROM pg_roles r ORDER BY r.rolname",
+            &[],
+        )
+        .await
+        .map_err(pg_err)?;
+    Ok(RoleListResult {
+        roles: rows
+            .into_iter()
+            .map(|r| RoleEntry {
+                name: r.get(0),
+                superuser: r.get(1),
+                inherit: r.get(2),
+                create_role: r.get(3),
+                create_db: r.get(4),
+                can_login: r.get(5),
+                replication: r.get(6),
+                conn_limit: r.get(7),
+                valid_until: r.get(8),
+                member_count: r.get(9),
+            })
+            .collect(),
+        current_user,
+        is_superuser,
+    })
+}
+
+pub async fn op_create_role(
+    state: &DbState,
+    connection_id: &str,
+    name: &str,
+    options: RoleOptions,
+) -> Result<u64, String> {
+    let clean = validate_role_name(name)?;
+    let qn = quote_ident(&clean)?;
+    let attrs = role_options_sql(&options, false)?;
+    let sql = format!("CREATE ROLE {qn} WITH {attrs}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
+}
+
+pub async fn op_alter_role(
+    state: &DbState,
+    connection_id: &str,
+    name: &str,
+    options: RoleOptions,
+) -> Result<u64, String> {
+    let clean = validate_role_name(name)?;
+    let qn = quote_ident(&clean)?;
+    let attrs = role_options_sql(&options, true)?;
+    let sql = format!("ALTER ROLE {qn} WITH {attrs}");
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
+}
+
+pub async fn op_drop_role(state: &DbState, connection_id: &str, name: &str) -> Result<u64, String> {
+    let clean = validate_role_name(name)?;
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    let (current_user, _) = fetch_whoami(&client).await?;
+    if clean == current_user {
+        return Err(format!(
+            "cannot drop role \"{clean}\" while connected as it"
+        ));
+    }
+    let qn = quote_ident(&clean)?;
+    let sql = format!("DROP ROLE {qn}");
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
+}
+
+pub async fn op_get_role_memberships(
+    state: &DbState,
+    connection_id: &str,
+    name: &str,
+) -> Result<RoleMemberships, String> {
+    let clean = validate_role_name(name)?;
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    // Existence check first for an actionable error instead of empty lists.
+    let exists: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM pg_roles WHERE rolname = $1",
+            &[&clean],
+        )
+        .await
+        .map_err(pg_err)?
+        .get(0);
+    if exists == 0 {
+        return Err(format!("role \"{clean}\" not found"));
+    }
+    let member_of_rows = client
+        .query(
+            "SELECT r.rolname FROM pg_roles r
+             JOIN pg_auth_members m ON m.roleid = r.oid
+             JOIN pg_roles t ON t.oid = m.member
+             WHERE t.rolname = $1 ORDER BY r.rolname",
+            &[&clean],
+        )
+        .await
+        .map_err(pg_err)?;
+    let member_rows = client
+        .query(
+            "SELECT t.rolname FROM pg_roles t
+             JOIN pg_auth_members m ON m.member = t.oid
+             JOIN pg_roles r ON r.oid = m.roleid
+             WHERE r.rolname = $1 ORDER BY t.rolname",
+            &[&clean],
+        )
+        .await
+        .map_err(pg_err)?;
+    Ok(RoleMemberships {
+        role: clean,
+        member_of: member_of_rows.into_iter().map(|r| r.get(0)).collect(),
+        members: member_rows.into_iter().map(|r| r.get(0)).collect(),
+    })
+}
+
+pub async fn op_grant_role(
+    state: &DbState,
+    connection_id: &str,
+    member: &str,
+    target: &str,
+) -> Result<u64, String> {
+    let clean_member = validate_role_name(member)?;
+    let clean_target = validate_role_name(target)?;
+    let sql = format!(
+        "GRANT {} TO {}",
+        quote_ident(&clean_member)?,
+        quote_ident(&clean_target)?
+    );
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
+}
+
+pub async fn op_revoke_role(
+    state: &DbState,
+    connection_id: &str,
+    member: &str,
+    target: &str,
+) -> Result<u64, String> {
+    let clean_member = validate_role_name(member)?;
+    let clean_target = validate_role_name(target)?;
+    let sql = format!(
+        "REVOKE {} FROM {}",
+        quote_ident(&clean_member)?,
+        quote_ident(&clean_target)?
+    );
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
+}

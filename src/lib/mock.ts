@@ -6,6 +6,10 @@ import type {
   ErModel,
   NewColumnDef,
   QueryResult,
+  RoleEntry,
+  RoleListResult,
+  RoleMemberships,
+  RoleOptions,
   SchemaEntry,
   SchemaPrivileges,
   ServerInfo,
@@ -139,6 +143,16 @@ const MOCK_ROWS: Record<string, unknown[][]> = {
 };
 
 const VIEW_TABLES = new Set(["order_summary"]);
+
+const MOCK_ROLES: RoleEntry[] = [
+  { name: "postgres", superuser: true, inherit: true, create_role: true, create_db: true, can_login: true, replication: true, conn_limit: -1, valid_until: null, member_count: 0 },
+  { name: "px_readonly", superuser: false, inherit: true, create_role: false, create_db: false, can_login: true, replication: false, conn_limit: -1, valid_until: null, member_count: 0 },
+  { name: "analytics_reader", superuser: false, inherit: true, create_role: false, create_db: false, can_login: false, replication: false, conn_limit: 5, valid_until: null, member_count: 1 },
+];
+
+/** member -> set of roles it is directly a member of. */
+const MOCK_MEMBERSHIPS: Map<string, Set<string>> = new Map();
+MOCK_MEMBERSHIPS.set("px_readonly", new Set(["analytics_reader"]));
 
 export const mock = {
   async testConnection(_p: ConnectionProfile): Promise<TestConnectionResult> {
@@ -499,5 +513,81 @@ export const mock = {
       ddl += `\nALTER TABLE ${q(schema)}.${q(table)} ADD CONSTRAINT ${q(`${table}_pkey`)} PRIMARY KEY (${pks.join(", ")});`;
     }
     return { schema, table, kind: "table", ddl };
+  },
+  async listRoles(): Promise<RoleListResult> {
+    await delay(150);
+    const withCounts = MOCK_ROLES.map((r) => ({
+      ...r,
+      member_count: [...MOCK_MEMBERSHIPS.values()].filter((s) => s.has(r.name)).length,
+    }));
+    return { roles: withCounts, current_user: "postgres", is_superuser: true };
+  },
+  async createRole(name: string, options: RoleOptions): Promise<number> {
+    await delay(120);
+    const clean = name.trim();
+    if (!clean) throw new Error("role name is required");
+    if (clean.length > 63) throw new Error("role name too long (max 63 chars)");
+    if (MOCK_ROLES.some((r) => r.name.toLowerCase() === clean.toLowerCase())) throw new Error(`role "${clean}" already exists`);
+    MOCK_ROLES.push({
+      name: clean,
+      superuser: options.superuser,
+      inherit: options.inherit,
+      create_role: options.create_role,
+      create_db: options.create_db,
+      can_login: options.can_login,
+      replication: options.replication,
+      conn_limit: options.conn_limit,
+      valid_until: options.valid_until?.trim() ? options.valid_until.trim() : null,
+      member_count: 0,
+    });
+    return 1;
+  },
+  async alterRole(name: string, options: RoleOptions): Promise<number> {
+    await delay(120);
+    const r = MOCK_ROLES.find((x) => x.name === name);
+    if (!r) throw new Error(`role "${name}" not found`);
+    r.superuser = options.superuser;
+    r.inherit = options.inherit;
+    r.create_role = options.create_role;
+    r.create_db = options.create_db;
+    r.can_login = options.can_login;
+    r.replication = options.replication;
+    r.conn_limit = options.conn_limit;
+    if (options.valid_until !== undefined && options.valid_until !== null) {
+      r.valid_until = options.valid_until.trim() ? options.valid_until.trim() : null;
+    }
+    return 1;
+  },
+  async dropRole(name: string): Promise<number> {
+    await delay(120);
+    if (name === "postgres") throw new Error('cannot drop role "postgres" while connected as it');
+    const idx = MOCK_ROLES.findIndex((r) => r.name === name);
+    if (idx < 0) throw new Error(`role "${name}" not found`);
+    MOCK_ROLES.splice(idx, 1);
+    MOCK_MEMBERSHIPS.delete(name);
+    for (const s of MOCK_MEMBERSHIPS.values()) s.delete(name);
+    return 1;
+  },
+  async getRoleMemberships(name: string): Promise<RoleMemberships> {
+    await delay(100);
+    if (!MOCK_ROLES.some((r) => r.name === name)) throw new Error(`role "${name}" not found`);
+    const member_of = [...(MOCK_MEMBERSHIPS.get(name) ?? [])].sort();
+    const members = [...MOCK_MEMBERSHIPS.entries()].filter(([, s]) => s.has(name)).map(([m]) => m).sort();
+    return { role: name, member_of, members };
+  },
+  async grantRole(member: string, target: string): Promise<number> {
+    await delay(100);
+    if (!MOCK_ROLES.some((r) => r.name === member)) throw new Error(`role "${member}" not found`);
+    if (!MOCK_ROLES.some((r) => r.name === target)) throw new Error(`role "${target}" not found`);
+    if (member === target) throw new Error("cannot grant a role to itself");
+    const set = MOCK_MEMBERSHIPS.get(member) ?? new Set<string>();
+    set.add(target);
+    MOCK_MEMBERSHIPS.set(member, set);
+    return 1;
+  },
+  async revokeRole(member: string, target: string): Promise<number> {
+    await delay(100);
+    MOCK_MEMBERSHIPS.get(member)?.delete(target);
+    return 1;
   },
 };

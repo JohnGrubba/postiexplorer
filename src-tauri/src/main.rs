@@ -310,6 +310,72 @@ async fn get_table_ddl(
     db::op_get_table_ddl(&state, &connection_id, &schema, &table).await
 }
 
+#[tauri::command]
+async fn list_roles(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+) -> Result<RoleListResult, String> {
+    db::op_list_roles(&state, &connection_id).await
+}
+
+#[tauri::command]
+async fn create_role(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    name: String,
+    options: RoleOptions,
+) -> Result<u64, String> {
+    db::op_create_role(&state, &connection_id, &name, options).await
+}
+
+#[tauri::command]
+async fn alter_role(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    name: String,
+    options: RoleOptions,
+) -> Result<u64, String> {
+    db::op_alter_role(&state, &connection_id, &name, options).await
+}
+
+#[tauri::command]
+async fn drop_role(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    name: String,
+) -> Result<u64, String> {
+    db::op_drop_role(&state, &connection_id, &name).await
+}
+
+#[tauri::command]
+async fn get_role_memberships(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    name: String,
+) -> Result<RoleMemberships, String> {
+    db::op_get_role_memberships(&state, &connection_id, &name).await
+}
+
+#[tauri::command]
+async fn grant_role(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    member: String,
+    target: String,
+) -> Result<u64, String> {
+    db::op_grant_role(&state, &connection_id, &member, &target).await
+}
+
+#[tauri::command]
+async fn revoke_role(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    member: String,
+    target: String,
+) -> Result<u64, String> {
+    db::op_revoke_role(&state, &connection_id, &member, &target).await
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -343,7 +409,14 @@ fn main() {
             alter_column_type,
             set_column_nullable,
             set_column_default,
-            get_table_ddl
+            get_table_ddl,
+            list_roles,
+            create_role,
+            alter_role,
+            drop_role,
+            get_role_memberships,
+            grant_role,
+            revoke_role
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

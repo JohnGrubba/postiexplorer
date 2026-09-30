@@ -77,6 +77,40 @@ export default function DumpDialog({ database, onClose, onRestored }: Props) {
     });
   }
 
+  /** Selectable (SELECT-privileged) object keys of one schema. */
+  function selectableIn(schema: string): string[] {
+    return (tablesBySchema[schema] ?? []).filter((t) => t.can_select).map((t) => `${t.schema}.${t.name}`);
+  }
+
+  /** One click toggles a whole schema: all-on → all-off, otherwise all-on. */
+  function toggleSchema(schema: string) {
+    const keys = selectableIn(schema);
+    if (keys.length === 0) return;
+    setSelected((s) => {
+      const n = new Set(s);
+      if (keys.every((k) => n.has(k))) {
+        for (const k of keys) n.delete(k);
+      } else {
+        for (const k of keys) n.add(k);
+      }
+      return n;
+    });
+  }
+
+  function selectAll() {
+    const all = new Set<string>();
+    for (const list of Object.values(tablesBySchema)) {
+      for (const t of list) {
+        if (t.can_select) all.add(`${t.schema}.${t.name}`);
+      }
+    }
+    setSelected(all);
+  }
+
+  function unselectAll() {
+    setSelected(new Set());
+  }
+
   async function doExport() {
     if (busy || targets.length === 0 || (!includeSchema && !includeData)) return;
     setBusy(true);
@@ -174,6 +208,12 @@ export default function DumpDialog({ database, onClose, onRestored }: Props) {
                   Data (INSERTs)
                 </label>
                 <div className="flex-1" />
+                <button onClick={selectAll} disabled={busy || loading} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-40">
+                  Select all
+                </button>
+                <button onClick={unselectAll} disabled={busy || loading || targets.length === 0} className="rounded-lg px-2 py-1 text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-40">
+                  Unselect all
+                </button>
                 <span className="font-mono text-slate-500">{targets.length} objects selected</span>
               </div>
               {loading ? (
@@ -182,9 +222,29 @@ export default function DumpDialog({ database, onClose, onRestored }: Props) {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {schemas.map((s) => (
+                  {schemas.map((s) => {
+                    const keys = selectableIn(s.name);
+                    const selCount = keys.filter((k) => selected.has(k)).length;
+                    const allOn = keys.length > 0 && selCount === keys.length;
+                    return (
                     <div key={s.name} className="overflow-hidden rounded-xl border border-edge">
-                      <div className="bg-panel2 px-2.5 py-1.5 font-mono text-xs text-slate-200">{s.name}</div>
+                      <label className="flex cursor-pointer items-center gap-2 bg-panel2 px-2.5 py-1.5 hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={allOn}
+                          ref={(el) => {
+                            if (el) el.indeterminate = selCount > 0 && !allOn;
+                          }}
+                          disabled={busy || keys.length === 0}
+                          onChange={() => toggleSchema(s.name)}
+                          className="h-3.5 w-3.5 accent-cyan-400"
+                          title={allOn ? `Deselect all in ${s.name}` : `Select all in ${s.name}`}
+                        />
+                        <span className="font-mono text-xs text-slate-200">{s.name}</span>
+                        <span className="font-mono text-[10px] text-slate-500">
+                          {keys.length === 0 ? "no selectable objects" : `${selCount}/${keys.length} selected`}
+                        </span>
+                      </label>
                       {(tablesBySchema[s.name] ?? []).map((t) => {
                         const key = `${t.schema}.${t.name}`;
                         return (
@@ -200,7 +260,8 @@ export default function DumpDialog({ database, onClose, onRestored }: Props) {
                         <div className="border-t border-white/[0.04] px-2.5 py-1.5 text-[11px] text-slate-600">No accessible tables</div>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </>
