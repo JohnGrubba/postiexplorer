@@ -16,7 +16,7 @@ Please include:
 
 - What you connected to (local Postgres, managed host, …) — never real credentials
 - The exact error text / logs and steps to reproduce
-- The app version and OS (`PostiExplorer_0.1.0_…`, Windows/Linux/macOS)
+- The app version and OS (shown in the header and status bar, e.g. `v0.1.1`, Windows/Linux/macOS)
 
 You will get a first response within 7 days. If confirmed, a fix and a
 release will follow, and you will be credited unless you prefer otherwise.

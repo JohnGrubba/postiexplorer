@@ -55,13 +55,15 @@ is not supported; build on each OS (or CI, see §5).
 
 ```
 releases/
-  windows/PostiExplorer_0.1.0_x64-setup.exe   ← installer (single .exe)
+  windows/PostiExplorer_<version>_x64-setup.exe   ← installer (single .exe)
   windows/*.msi
   linux/*.AppImage                             ← single file, chmod +x to run
   linux/*.deb  linux/*.rpm
   macos/*.dmg
   portable/postiexplorer(.exe)                 ← raw single-file binary
 ```
+
+The `<version>` in installer names comes from `package.json` — see §8.
 
 Raw Tauri output stays under `src-tauri/target/release/` (`postiexplorer(.exe)`)
 and `.../bundle/` — `releases/` is just the collected, shippable copy.
@@ -120,3 +122,29 @@ strategy: # (see file for full definition)
 - Screenshots in `screenshots/` (7 states) + `scrollWidth == clientWidth` (no horizontal overflow)
 - Live-DB path: backend compiles; point a profile at your Postgres and press
   **Test connection** (mock data is used in browser preview only).
+
+## 8. Versioning (single source of truth)
+
+`package.json` → `"version"` decides everything. To cut e.g. **V0.1.1**:
+
+```bash
+npm version 0.1.1     # bumps package.json (+ lockfile) and tags the commit
+npm run dist          # everything below follows automatically
+```
+
+(or just edit the `version` field in `package.json` by hand).
+
+What follows automatically on every `npm run build` / `npm run dist` /
+`npm run tauri ...` (via `prebuild` / `predist` hooks →
+`scripts/sync-version.mjs`):
+
+| Artifact | Source after sync |
+|---|---|
+| `src-tauri/tauri.conf.json` → `version` | = package.json |
+| `src-tauri/Cargo.toml` → `[package] version` | = package.json |
+| Installer/bundle file names (`PostiExplorer_<version>_…`) | derived by Tauri |
+| Header + status bar in the app UI | baked in at build time (`__APP_VERSION__`, see `vite.config.ts`) |
+| `src-tauri/Cargo.lock` (`postiexplorer` entry) | refreshed by cargo itself on the next build |
+
+Check drift without writing anything: `npm run version:check`
+(exits 1 when the files disagree — e.g. after a hand-edit).

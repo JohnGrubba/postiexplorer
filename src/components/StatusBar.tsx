@@ -23,6 +23,7 @@ export default function StatusBar({
       </span>
       <span className="flex-1" />
       {latency !== null && <span className="font-mono">{latency} ms</span>}
+      <span className="hidden font-mono md:block">v{__APP_VERSION__}</span>
       <span className="hidden md:block">PostgreSQL · Tauri v2 · React</span>
     </footer>
   );

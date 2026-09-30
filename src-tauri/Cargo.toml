@@ -1,6 +1,6 @@
 [package]
 name = "postiexplorer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Modern PostgreSQL explorer — single-binary desktop app"
 authors = ["Jonas Grubbauer"]
 license = "MIT"

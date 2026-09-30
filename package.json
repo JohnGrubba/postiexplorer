@@ -28,9 +28,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "prebuild": "node scripts/sync-version.mjs",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/sync-version.mjs && tauri",
     "dist": "node scripts/build-release.mjs",
+    "predist": "node scripts/sync-version.mjs",
+    "sync-version": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
     "test:db": "docker compose up -d && npm run build && cargo test --test live_db --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
@@ -42,6 +46,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
+    "@types/node": "^26.6.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

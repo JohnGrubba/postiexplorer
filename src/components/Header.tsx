@@ -24,7 +24,7 @@ export default function Header({ profiles, activeId, connected, currentDb, busy,
             Posti<span className="bg-gradient-to-r from-neon to-violet2 bg-clip-text text-transparent">Explorer</span>
           </div>
           <div className="text-[11px] text-slate-400">
-            PostgreSQL Studio · v0.1.0 {isTauri() ? "· desktop · live backend" : "· web preview · mock data"}
+            PostgreSQL Studio · v{__APP_VERSION__} {isTauri() ? "· desktop · live backend" : "· web preview · mock data"}
           </div>
         </div>
       </div>
