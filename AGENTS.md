@@ -40,5 +40,6 @@ Live-DB suite is `src-tauri/tests/live_db.rs` (connect, picker flow, error SQLST
 - TLS: backend always uses `NoTls` (`TLS TODO` in `db.rs`). `sslmode=require` is accepted/validated but not actually encrypted — don't claim otherwise.
 - Layout: `h-screen` flex with internal scroll; verify at 1280×800 and 960px min width, no horizontal overflow.
 - Errors must include SQLSTATE detail (e.g. `28P01`, `3D000`), never bare `db error`.
+- README.md must be updated with every change/feature: move items between `✅ Implemented` / `❌ roadmap` tables, update Architecture / Project layout sections if files change, add screenshots for UI changes. Never hand-edit versioned asset names — `sync-version.mjs` owns them.
 - TS `strict`, Rust `cargo fmt` clean. Commits: short imperative scoped (`fix: …`, `feat: …`).
 - CI (`.github/workflows/build.yml`): path-filtered (src/src-tauri/scripts/config only); Linux job runs live-DB tests then `npm run dist -- --bundles appimage deb` (no rpm); rolling `latest` release on every push to `main`, no manual tags.
