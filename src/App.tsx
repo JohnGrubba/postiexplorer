@@ -144,6 +144,9 @@ export default function App() {
     { id: "info", label: "Server", icon: Info },
   ];
 
+  // Query state (text, history, last result) is kept per profile + database.
+  const queryPersistKey = `${activeId ?? "none"}::${currentDb ?? active?.database ?? "none"}`;
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-void text-slate-100">
       {/* ambient glow */}
@@ -225,7 +228,11 @@ export default function App() {
               {tab === "data" && <TableDataView schema={schema} table={table} />}
               {tab === "structure" && <StructureView schema={schema} table={table} />}
               {tab === "er" && <ErDiagramView key={currentDb ?? "none"} connected={connected} />}
-              {tab === "query" && <QueryView />}
+              {/* Keep the query editor mounted while hidden so selecting another
+                  table (which hops to the Data tab) never wipes its state. */}
+              <div className={tab === "query" ? "flex min-h-0 flex-1 overflow-hidden" : "hidden"}>
+                <QueryView persistKey={queryPersistKey} schema={schema} table={table} />
+              </div>
               {tab === "info" && <InfoView key={currentDb ?? "none"} connected={connected} />}
             </div>
           </main>

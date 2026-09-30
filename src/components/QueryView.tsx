@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, History, Play, Trash2 } from "lucide-react";
 import { executeSql } from "../lib/api";
 import type { QueryResult } from "../types";
@@ -11,22 +11,172 @@ GROUP BY 1, 2
 ORDER BY orders DESC
 LIMIT 50;`;
 
-export default function QueryView() {
+const HISTORY_LIMIT = 20;
+const STORAGE_PREFIX = "postiexplorer.query.v1.";
+const SAVE_DEBOUNCE_MS = 400;
+/** Cap persisted result rows so one huge result can't blow the localStorage quota. */
+const MAX_STORED_ROWS = 200;
+
+function quoteIdent(id: string): string {
+  return `"${id.replace(/"/g, '""')}"`;
+}
+
+/** Working starter query for the current selection — quoted so any table name runs. */
+function selectAllFor(schema: string | null, table: string | null): string {
+  if (!schema || !table) return SAMPLE;
+  return `SELECT *\nFROM ${quoteIdent(schema)}.${quoteIdent(table)}\nLIMIT 100;`;
+}
+
+interface SavedQueryState {
+  sql: string;
+  history: string[];
+  result: QueryResult | null;
+  touched?: boolean;
+}
+
+function loadSavedState(key: string): SavedQueryState | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_PREFIX + key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SavedQueryState>;
+    const sql = typeof parsed.sql === "string" && parsed.sql.length > 0 ? parsed.sql : SAMPLE;
+    const history = Array.isArray(parsed.history)
+      ? parsed.history.filter((h): h is string => typeof h === "string").slice(0, HISTORY_LIMIT)
+      : [];
+    const r = parsed.result;
+    const result =
+      r && typeof r === "object" && Array.isArray(r.columns) && Array.isArray(r.rows) ? (r as QueryResult) : null;
+    return { sql, history, result };
+  } catch {
+    return null;
+  }
+}
+
+function saveState(key: string, state: SavedQueryState) {
+  try {
+    const storedResult =
+      state.result && state.result.rows.length > MAX_STORED_ROWS
+        ? { ...state.result, rows: state.result.rows.slice(0, MAX_STORED_ROWS) }
+        : state.result;
+    localStorage.setItem(
+      STORAGE_PREFIX + key,
+      JSON.stringify({
+        sql: state.sql,
+        history: state.history.slice(0, HISTORY_LIMIT),
+        result: storedResult,
+        touched: state.touched ?? false,
+      }),
+    );
+  } catch {
+    // Quota exceeded or storage unavailable — retry without the (potentially large) result.
+    try {
+      localStorage.setItem(
+        STORAGE_PREFIX + key,
+        JSON.stringify({ sql: state.sql, history: state.history.slice(0, HISTORY_LIMIT), result: null }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export default function QueryView({
+  persistKey,
+  schema,
+  table,
+}: {
+  persistKey: string;
+  schema: string | null;
+  table: string | null;
+}) {
   const [sql, setSql] = useState(SAMPLE);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
 
+  // ── per-connection persistence ──
+  const keyRef = useRef(persistKey);
+  /** True once the user typed, ran, or restored a previous session — gates selection-following. */
+  const touchedRef = useRef(false);
+  const stateRef = useRef<SavedQueryState>({ sql, history, result, touched: false });
+  stateRef.current = { sql, history, result, touched: touchedRef.current };
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Restore persisted state on mount.
+  useEffect(() => {
+    const saved = loadSavedState(keyRef.current);
+    if (saved) {
+      setSql(saved.sql);
+      setHistory(saved.history);
+      setResult(saved.result);
+      // A stored state implies a previous session even if it predates the touched flag.
+      touchedRef.current = saved.touched ?? true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // First open: show a working query for the selected table, and keep
+  // following the selection until the user edits, runs, or restores a session.
+  useEffect(() => {
+    if (touchedRef.current) return;
+    setSql(selectAllFor(schema, table));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schema, table]);
+
+  // Flush pending writes on unmount.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      saveState(keyRef.current, stateRef.current);
+    };
+  }, []);
+
+  // Connection switch: save the old connection's state, load the new one.
+  // Otherwise debounce-save so every keystroke doesn't stringify a big result.
+  useEffect(() => {
+    if (keyRef.current !== persistKey) {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      saveState(keyRef.current, stateRef.current);
+      keyRef.current = persistKey;
+      const saved = loadSavedState(persistKey);
+      touchedRef.current = saved ? (saved.touched ?? true) : false;
+      setSql(saved?.sql ?? selectAllFor(schema, table));
+      setHistory(saved?.history ?? []);
+      setResult(saved?.result ?? null);
+      setError(null);
+      return;
+    }
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      saveState(persistKey, stateRef.current);
+    }, SAVE_DEBOUNCE_MS);
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [persistKey, sql, history, result, schema, table]);
+
   async function run(query?: string) {
     const q = (query ?? sql).trim();
     if (!q || running) return;
+    touchedRef.current = true;
     setRunning(true);
     setError(null);
     try {
       const res = await executeSql(q);
       setResult(res);
-      setHistory((h) => [q, ...h].slice(0, 20));
+      // Deduplicate: re-running (e.g. from history) moves the entry to the front.
+      setHistory((h) => [q, ...h.filter((x) => x !== q)].slice(0, HISTORY_LIMIT));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -72,7 +222,10 @@ export default function QueryView() {
 
       <textarea
         value={sql}
-        onChange={(e) => setSql(e.target.value)}
+        onChange={(e) => {
+          touchedRef.current = true;
+          setSql(e.target.value);
+        }}
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
         }}
