@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
   Download,
+  EyeOff,
   FileCode2,
   Focus,
   KeyRound,
@@ -10,6 +11,7 @@ import {
   Maximize,
   Minus,
   Plus,
+  RotateCcw,
   Search,
   Settings2,
   Table2,
@@ -25,6 +27,11 @@ const HEADER_H_WITH_META = 56;
 const HEADER_H_SLIM = 44;
 const ROW_H = 28;
 const ROW_H_WITH_DEFAULT = 40;
+const GAP_X = 80;
+const GAP_Y = 56;
+const GROUP_GAP_X = 150;
+const GROUP_GAP_Y = 110;
+const EMPTY_COLS_PLACEHOLDER_H = 30;
 
 const SCHEMA_PALETTE = ["#22d3ee", "#8b5cf6", "#f59e0b", "#34d399", "#fb7185", "#60a5fa", "#facc15", "#2dd4bf"];
 
@@ -37,6 +44,7 @@ const DEFAULT_OPTIONS: ErDetailOptions = {
   showIsolated: true,
   showRelationLabels: true,
   colorBySchema: true,
+  relationsOnly: false,
 };
 
 const OPTIONS_KEY = "postiexplorer-er-options";
@@ -63,9 +71,35 @@ function rowHeight(opts: ErDetailOptions): number {
   return opts.showDefaults ? ROW_H_WITH_DEFAULT : ROW_H;
 }
 
-function nodeHeight(t: ErTable, opts: ErDetailOptions): number {
+/** Columns that participate in any relationship (FK source or referenced target). */
+function buildRelatedColumns(relations: ErRelation[]): Map<string, Set<string>> {
+  const m = new Map<string, Set<string>>();
+  for (const r of relations) {
+    const sk = tkey(r.source_schema, r.source_table);
+    const tk = tkey(r.target_schema, r.target_table);
+    if (!m.has(sk)) m.set(sk, new Set());
+    if (!m.has(tk)) m.set(tk, new Set());
+    m.get(sk)!.add(r.source_column);
+    m.get(tk)!.add(r.target_column);
+  }
+  return m;
+}
+
+/** Columns actually rendered for a table (compact mode keeps PKs + relation columns). */
+function displayColumns(t: ErTable, related: Map<string, Set<string>>, opts: ErDetailOptions) {
+  if (!opts.relationsOnly) return t.columns;
+  const rel = related.get(tkey(t.schema, t.name));
+  return t.columns.filter((c) => c.is_primary || rel?.has(c.name));
+}
+
+function tableHeight(t: ErTable, opts: ErDetailOptions, visibleCount: number): number {
   const header = opts.showRowCounts ? HEADER_H_WITH_META : HEADER_H_SLIM;
-  return header + t.columns.length * rowHeight(opts) + 8;
+  if (visibleCount === 0) return header + EMPTY_COLS_PLACEHOLDER_H + 8;
+  return header + visibleCount * rowHeight(opts) + 8;
+}
+
+function heightOf(t: ErTable, opts: ErDetailOptions, related: Map<string, Set<string>>): number {
+  return tableHeight(t, opts, displayColumns(t, related, opts).length);
 }
 
 function shortType(t: string): string {
@@ -106,12 +140,117 @@ function fkSet(relations: ErRelation[], schema: string, table: string): Set<stri
   return s;
 }
 
-type LayoutMode = "grid" | "schema" | "hub";
+type LayoutMode = "auto" | "grid" | "schema" | "hub";
 type Pos = { x: number; y: number };
 
-function autoLayout(tables: ErTable[], opts: ErDetailOptions, mode: LayoutMode): Record<string, Pos> {
+function tableDegree(tables: ErTable[], relations: ErRelation[]): Map<string, number> {
+  const keys = new Set(tables.map((t) => tkey(t.schema, t.name)));
+  const deg = new Map<string, number>();
+  for (const t of tables) deg.set(tkey(t.schema, t.name), 0);
+  for (const r of relations) {
+    const a = tkey(r.source_schema, r.source_table);
+    const b = tkey(r.target_schema, r.target_table);
+    if (keys.has(a) && keys.has(b)) {
+      deg.set(a, (deg.get(a) ?? 0) + 1);
+      if (a !== b) deg.set(b, (deg.get(b) ?? 0) + 1);
+    }
+  }
+  return deg;
+}
+
+/** Push overlapping AABB boxes apart. Mutates `pos` in place. */
+function separateOverlaps(
+  pos: Record<string, Pos>,
+  sizes: Map<string, { w: number; h: number }>,
+  iterations = 60,
+) {
+  const keys = Object.keys(pos);
+  if (keys.length < 2) return;
+  const sorted = [...keys].sort();
+  for (let it = 0; it < iterations; it++) {
+    let moved = false;
+    for (let i = 0; i < sorted.length; i++) {
+      for (let j = i + 1; j < sorted.length; j++) {
+        const a = sorted[i];
+        const b = sorted[j];
+        const pa = pos[a];
+        const pb = pos[b];
+        const sa = sizes.get(a);
+        const sb = sizes.get(b);
+        if (!sa || !sb) continue;
+        const ax = pa.x + sa.w / 2;
+        const ay = pa.y + sa.h / 2;
+        const bx = pb.x + sb.w / 2;
+        const by = pb.y + sb.h / 2;
+        const overlapX = (sa.w + sb.w) / 2 + GAP_X - Math.abs(ax - bx);
+        const overlapY = (sa.h + sb.h) / 2 + GAP_Y - Math.abs(ay - by);
+        if (overlapX > 0 && overlapY > 0) {
+          moved = true;
+          if (overlapX < overlapY) {
+            const push = overlapX / 2 + 1;
+            const dir = ax <= bx ? -1 : 1;
+            pa.x += dir * push;
+            pb.x -= dir * push;
+          } else {
+            const push = overlapY / 2 + 1;
+            const dir = ay <= by ? -1 : 1;
+            pa.y += dir * push;
+            pb.y -= dir * push;
+          }
+        }
+      }
+    }
+    if (!moved) return;
+  }
+}
+
+/** Layout a list of tables (already sorted) into a compact grid with dynamic row heights. */
+function gridPlace(
+  ordered: ErTable[],
+  heights: Map<string, number>,
+  originX: number,
+  originY: number,
+  cols: number,
+  out: Record<string, Pos>,
+): { w: number; h: number } {
+  let y = originY;
+  let maxW = 0;
+  for (let r = 0; r * cols < ordered.length; r++) {
+    const row = ordered.slice(r * cols, r * cols + cols);
+    let rowH = 0;
+    row.forEach((t, c) => {
+      const k = tkey(t.schema, t.name);
+      out[k] = { x: originX + c * (NODE_W + GAP_X), y };
+      rowH = Math.max(rowH, heights.get(k) ?? 300);
+    });
+    maxW = Math.max(maxW, row.length * (NODE_W + GAP_X) - GAP_X);
+    y += rowH + GAP_Y;
+  }
+  const totalH = ordered.length === 0 ? 0 : y - originY - GAP_Y;
+  return { w: Math.max(maxW, NODE_W), h: Math.max(totalH, heights.get(tkey(ordered[0]?.schema ?? "", ordered[0]?.name ?? "")) ?? 0) };
+}
+
+function autoLayout(
+  tables: ErTable[],
+  relations: ErRelation[],
+  opts: ErDetailOptions,
+  mode: LayoutMode,
+): Record<string, Pos> {
   const pos: Record<string, Pos> = {};
   if (tables.length === 0) return pos;
+  const related = buildRelatedColumns(relations);
+  const heights = new Map<string, number>();
+  for (const t of tables) heights.set(tkey(t.schema, t.name), heightOf(t, opts, related));
+  const sizes = new Map<string, { w: number; h: number }>();
+  for (const [k, h] of heights) sizes.set(k, { w: NODE_W, h });
+
+  const visibleKeys = new Set(tables.map((t) => tkey(t.schema, t.name)));
+  const rels = relations.filter(
+    (r) => visibleKeys.has(tkey(r.source_schema, r.source_table)) && visibleKeys.has(tkey(r.target_schema, r.target_table)),
+  );
+  const degree = tableDegree(tables, rels);
+  const byKey = new Map(tables.map((t) => [tkey(t.schema, t.name), t]));
+
   if (mode === "schema") {
     const bySchema = new Map<string, ErTable[]>();
     for (const t of tables) {
@@ -119,49 +258,147 @@ function autoLayout(tables: ErTable[], opts: ErDetailOptions, mode: LayoutMode):
       arr.push(t);
       bySchema.set(t.schema, arr);
     }
-    const schemas = [...bySchema.keys()].sort();
+    const names = [...bySchema.keys()].sort();
+    // Tall schemas wrap into extra columns so no single column grows unbounded.
+    const WRAP_H = 2600;
     let x = 40;
-    for (const s of schemas) {
+    for (const s of names) {
+      const group = (bySchema.get(s) ?? []).sort(
+        (a, b) => (degree.get(tkey(b.schema, b.name)) ?? 0) - (degree.get(tkey(a.schema, a.name)) ?? 0),
+      );
       let y = 40;
-      const group = bySchema.get(s)!;
-      let colMaxW = NODE_W;
+      let xEnd = x;
       for (const t of group) {
-        pos[tkey(t.schema, t.name)] = { x, y };
-        y += nodeHeight(t, opts) + 36;
-        void colMaxW;
+        const k = tkey(t.schema, t.name);
+        const h = heights.get(k) ?? 300;
+        if (y > 40 + WRAP_H) {
+          x += NODE_W + GAP_X;
+          y = 40;
+        }
+        pos[k] = { x, y };
+        y += h + GAP_Y;
+        xEnd = Math.max(xEnd, x);
       }
-      x += NODE_W + 96;
+      x = xEnd + NODE_W + GAP_X + 64;
     }
     return pos;
   }
+
   if (mode === "hub") {
-    // Most-connected table in the centre, rest on ellipses around it.
-    const sorted = [...tables].sort((a, b) => b.columns.length - a.columns.length);
-    const cx = 640;
-    const cy = 480;
-    sorted.forEach((t, i) => {
-      if (i === 0) {
-        pos[tkey(t.schema, t.name)] = { x: cx, y: cy };
-        return;
+    const sorted = [...tables].sort((a, b) => (degree.get(tkey(b.schema, b.name)) ?? 0) - (degree.get(tkey(a.schema, a.name)) ?? 0));
+    const hub = sorted[0];
+    const hubKey = tkey(hub.schema, hub.name);
+    const hubH = heights.get(hubKey) ?? 400;
+    // Centre the hub, fan the rest out on a spiral with generous radii, then de-overlap.
+    const cx = 900;
+    const cy = 700;
+    pos[hubKey] = { x: cx, y: cy };
+    const rest = sorted.slice(1);
+    // Ring capacity grows with radius so cards never stack on each other.
+    let placed = 0;
+    let ring = 0;
+    while (placed < rest.length) {
+      const rx = 560 + ring * 480;
+      const ry = 480 + ring * 420;
+      const circumference = Math.PI * (rx + ry);
+      const capacity = Math.max(6, Math.floor(circumference / (NODE_W + GAP_X)));
+      const take = Math.min(capacity, rest.length - placed);
+      for (let i = 0; i < take; i++) {
+        const t = rest[placed + i];
+        const angle = ((i / take) * Math.PI * 2 - Math.PI / 2 + ring * 0.45) % (Math.PI * 2);
+        pos[tkey(t.schema, t.name)] = {
+          x: Math.round(cx + Math.cos(angle) * rx),
+          y: Math.round(cy + Math.sin(angle) * ry - (heights.get(tkey(t.schema, t.name)) ?? 300) / 2 + hubH / 2),
+        };
       }
-      const ring = Math.floor((i - 1) / 8);
-      const idx = (i - 1) % 8;
-      const rx = 420 + ring * 360;
-      const ry = 340 + ring * 300;
-      const angle = (idx / 8) * Math.PI * 2 - Math.PI / 2 + ring * 0.4;
-      pos[tkey(t.schema, t.name)] = { x: cx + Math.cos(angle) * rx, y: cy + Math.sin(angle) * ry };
-    });
+      placed += take;
+      ring++;
+    }
+    separateOverlaps(pos, sizes, 80);
     return pos;
   }
-  // grid
-  const cols = Math.max(1, Math.ceil(Math.sqrt(tables.length)));
-  const cellX = NODE_W + 88;
-  const cellY = 320;
-  tables.forEach((t, i) => {
-    const c = i % cols;
-    const r = Math.floor(i / cols);
-    pos[tkey(t.schema, t.name)] = { x: 40 + c * cellX, y: 40 + r * cellY };
+
+  if (mode === "grid") {
+    const ordered = [...tables].sort((a, b) => {
+      const d = (degree.get(tkey(b.schema, b.name)) ?? 0) - (degree.get(tkey(a.schema, a.name)) ?? 0);
+      if (d !== 0) return d;
+      const s = a.schema.localeCompare(b.schema);
+      return s !== 0 ? s : a.name.localeCompare(b.name);
+    });
+    const cols = Math.max(1, Math.ceil(Math.sqrt(ordered.length)));
+    gridPlace(ordered, heights, 40, 40, cols, pos);
+    return pos;
+  }
+
+  // ── auto (default): group connected tables so relations stay local ──
+  const adj = new Map<string, Set<string>>();
+  for (const t of tables) adj.set(tkey(t.schema, t.name), new Set());
+  for (const r of rels) {
+    const a = tkey(r.source_schema, r.source_table);
+    const b = tkey(r.target_schema, r.target_table);
+    if (a === b) continue;
+    adj.get(a)?.add(b);
+    adj.get(b)?.add(a);
+  }
+  const seen = new Set<string>();
+  const components: ErTable[][] = [];
+  for (const t of tables) {
+    const k = tkey(t.schema, t.name);
+    if (seen.has(k)) continue;
+    const comp: ErTable[] = [];
+    const stack = [k];
+    seen.add(k);
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      const tbl = byKey.get(cur);
+      if (tbl) comp.push(tbl);
+      for (const nb of adj.get(cur) ?? []) {
+        if (!seen.has(nb)) {
+          seen.add(nb);
+          stack.push(nb);
+        }
+      }
+    }
+    components.push(comp);
+  }
+  // Largest / most-connected components first; isolated tables sink to the end.
+  components.sort((a, b) => {
+    if (b.length !== a.length) return b.length - a.length;
+    const da = a.reduce((s, t) => s + (degree.get(tkey(t.schema, t.name)) ?? 0), 0);
+    const db = b.reduce((s, t) => s + (degree.get(tkey(t.schema, t.name)) ?? 0), 0);
+    return db - da;
   });
+
+  // Estimate a balanced row width from total block area so the diagram is roughly square.
+  let totalArea = 0;
+  for (const t of tables) totalArea += NODE_W * (heights.get(tkey(t.schema, t.name)) ?? 300);
+  const maxRowW = Math.min(3400, Math.max(1500, Math.sqrt(totalArea) * 1.5));
+
+  let x = 40;
+  let y = 40;
+  let rowH = 0;
+  for (const comp of components) {
+    const ordered = [...comp].sort((a, b) => {
+      const d = (degree.get(tkey(b.schema, b.name)) ?? 0) - (degree.get(tkey(a.schema, a.name)) ?? 0);
+      return d !== 0 ? d : a.name.localeCompare(b.name);
+    });
+    const cols = Math.max(1, Math.ceil(Math.sqrt(ordered.length)));
+    // Measure first with a scratch map so we know the block size before placing.
+    const scratch: Record<string, Pos> = {};
+    const block = gridPlace(ordered, heights, 0, 0, cols, scratch);
+    if (x > 40 && x + block.w > maxRowW) {
+      x = 40;
+      y += rowH + GROUP_GAP_Y;
+      rowH = 0;
+    }
+    for (const t of ordered) {
+      const k = tkey(t.schema, t.name);
+      pos[k] = { x: x + scratch[k].x, y: y + scratch[k].y };
+    }
+    x += block.w + GROUP_GAP_X;
+    rowH = Math.max(rowH, block.h);
+  }
+  separateOverlaps(pos, sizes, 30);
   return pos;
 }
 
@@ -207,7 +444,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
   const [showOpts, setShowOpts] = useState(false);
   const [search, setSearch] = useState("");
   const [schemaFilter, setSchemaFilter] = useState<string>("all");
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid");
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("auto");
   const [positions, setPositions] = useState<Record<string, Pos>>({});
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const [selected, setSelected] = useState<string | null>(null);
@@ -259,6 +496,12 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     return m;
   }, [model]);
 
+  /** All relation columns (source + target) across the whole model — drives compact mode. */
+  const relatedCols = useMemo(() => {
+    if (!model) return new Map<string, Set<string>>();
+    return buildRelatedColumns(model.relations);
+  }, [model]);
+
   const connectedTables = useMemo(() => {
     const s = new Set<string>();
     if (!model) return s;
@@ -282,6 +525,12 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     });
   }, [model, opts.showViews, opts.showIsolated, schemaFilter, search, connectedTables]);
 
+  const tableHeights = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of filtered) m.set(tkey(t.schema, t.name), heightOf(t, opts, relatedCols));
+    return m;
+  }, [filtered, opts, relatedCols]);
+
   const visibleRelations = useMemo(() => {
     if (!model) return [];
     const keys = new Set(filtered.map((t) => tkey(t.schema, t.name)));
@@ -290,21 +539,29 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     );
   }, [model, filtered]);
 
-  // (re)layout when the table set or layout mode changes — manual drags persist afterwards
+  // (re)layout when the table set, layout mode, or compact mode changes — manual drags persist afterwards
   useEffect(() => {
     if (filtered.length === 0) return;
     setPositions((prev) => {
       const keys = new Set(filtered.map((t) => tkey(t.schema, t.name)));
       const hasAll = [...keys].every((k) => prev[k]);
-      // keep manual positions if they already cover this exact set
+      // keep manual positions if they already cover this exact set *and* the layout inputs match
       if (hasAll && Object.keys(prev).length === keys.size) return prev;
-      const fresh = autoLayout(filtered, opts, layoutMode);
+      const fresh = autoLayout(filtered, model?.relations ?? [], opts, layoutMode);
       // preserve drags for tables that are still visible
       for (const k of Object.keys(prev)) if (keys.has(k) && fresh[k]) fresh[k] = prev[k];
       return fresh;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered.length, layoutMode, model !== null]);
+  }, [filtered.length, layoutMode, model !== null, opts.relationsOnly]);
+
+  const fittedKey = useRef<string | null>(null);
+
+  const relayout = useCallback(() => {
+    if (filtered.length === 0) return;
+    fittedKey.current = null;
+    setPositions(autoLayout(filtered, model?.relations ?? [], opts, layoutMode));
+  }, [filtered, model, opts, layoutMode]);
 
   const activeKey = hovered ?? selected;
 
@@ -337,7 +594,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x + NODE_W);
-      maxY = Math.max(maxY, p.y + nodeHeight(t, opts));
+      maxY = Math.max(maxY, p.y + (tableHeights.get(tkey(t.schema, t.name)) ?? heightOf(t, opts, relatedCols)));
     }
     if (!isFinite(minX)) return;
     if (el.clientWidth < 10 || el.clientHeight < 10) return;
@@ -346,18 +603,17 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     const bh = maxY - minY + pad * 2;
     const k = Math.min(1.2, Math.max(0.2, Math.min(el.clientWidth / bw, el.clientHeight / bh)));
     setView({ k, x: el.clientWidth / 2 - ((minX + maxX) / 2) * k, y: Math.max(12, el.clientHeight / 2 - ((minY + maxY) / 2) * k) });
-  }, [filtered, positions, opts]);
+  }, [filtered, positions, opts, relatedCols, tableHeights]);
 
-  const fittedKey = useRef<string | null>(null);
   useEffect(() => {
     if (!model || filtered.length === 0) return;
     if (Object.keys(positions).length < filtered.length) return;
-    const key = `${filtered.length}|${layoutMode}|${filtered.map((t) => tkey(t.schema, t.name)).join(",")}`;
+    const key = `${filtered.length}|${layoutMode}|${opts.relationsOnly}|${filtered.map((t) => tkey(t.schema, t.name)).join(",")}`;
     if (fittedKey.current === key) return;
     fittedKey.current = key;
     const t = setTimeout(fitView, 50);
     return () => clearTimeout(t);
-  }, [model, filtered, positions, layoutMode, fitView]);
+  }, [model, filtered, positions, layoutMode, opts.relationsOnly, fitView]);
 
   // ── pan / zoom / drag ──
   function onWheel(e: React.WheelEvent) {
@@ -414,40 +670,63 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     dragRef.current = null;
   }
 
-  // ── edges ──
+  // ── edges (side-aware so lines leave the facing sides, plus self-loops) ──
   const edges = useMemo(() => {
     const pairCount = new Map<string, number>();
+    const byKey = new Map(filtered.map((t) => [tkey(t.schema, t.name), t]));
     return visibleRelations.map((r, i) => {
       const sk = tkey(r.source_schema, r.source_table);
       const tk = tkey(r.target_schema, r.target_table);
-      const sTable = filtered.find((t) => tkey(t.schema, t.name) === sk);
-      const tTable = filtered.find((t) => tkey(t.schema, t.name) === tk);
+      const sTable = byKey.get(sk);
+      const tTable = byKey.get(tk);
       const sp = positions[sk];
       const tp = positions[tk];
       if (!sTable || !tTable || !sp || !tp) return null;
-      const sIdx = Math.max(0, sTable.columns.findIndex((c) => c.name === r.source_column));
-      const tIdx = Math.max(0, tTable.columns.findIndex((c) => c.name === r.target_column));
-      const headerS = opts.showRowCounts ? HEADER_H_WITH_META : HEADER_H_SLIM;
-      const headerT = headerS;
+      const sCols = displayColumns(sTable, relatedCols, opts);
+      const tCols = sk === tk ? sCols : displayColumns(tTable, relatedCols, opts);
+      let sIdx = sCols.findIndex((c) => c.name === r.source_column);
+      let tIdx = tCols.findIndex((c) => c.name === r.target_column);
+      // Hidden in compact mode (shouldn't happen for FK cols) — fall back to header edge.
+      if (sIdx < 0) sIdx = 0;
+      if (tIdx < 0) tIdx = 0;
+      const header = opts.showRowCounts ? HEADER_H_WITH_META : HEADER_H_SLIM;
       const rh = rowHeight(opts);
-      const x1 = sp.x + NODE_W;
-      const y1 = sp.y + headerS + sIdx * rh + rh / 2;
-      const x2 = tp.x;
-      const y2 = tp.y + headerT + tIdx * rh + rh / 2;
+      const sCount = Math.max(1, sCols.length);
+      const tCount = Math.max(1, tCols.length);
+      const y1 = sp.y + header + Math.min(sIdx, sCount - 1) * rh + rh / 2;
+      const y2 = tp.y + header + Math.min(tIdx, tCount - 1) * rh + rh / 2;
       // offset overlapping edges between the same table pair
-      const pairKey = sk < tk ? `${sk}|${tk}` : `${tk}|${sk}`;
+      const pairKey = sk < tk ? `${sk}|${tk}|${r.source_column}|${r.target_column}` : `${tk}|${sk}|${r.target_column}|${r.source_column}`;
       const n = pairCount.get(pairKey) ?? 0;
       pairCount.set(pairKey, n + 1);
-      const lane = (n - 1) * 9;
+      const lane = n * 9;
+
+      // Self-reference: draw a loop on the right side.
+      if (sk === tk) {
+        const x = sp.x + NODE_W;
+        const loopW = 46 + n * 10;
+        const my1 = y1 + lane;
+        const my2 = y2 + lane;
+        const spread = Math.max(28, Math.abs(my2 - my1));
+        const d = `M ${x} ${my1} C ${x + loopW} ${my1}, ${x + loopW} ${my2 + (my2 === my1 ? spread : 0)}, ${x} ${my2 + (my2 === my1 ? spread : 0)}`;
+        return { r, i, d, x1: x, y1: my1, x2: x, y2: my2, midX: x + loopW - 6, midY: (my1 + my2) / 2, sk, tk };
+      }
+
+      // Connect the facing sides to shorten lines and reduce crossings.
+      const sourceLeft = sp.x + NODE_W / 2 > tp.x + NODE_W / 2;
+      const x1 = sourceLeft ? sp.x : sp.x + NODE_W;
+      const x2 = sourceLeft ? tp.x + NODE_W : tp.x;
+      const dir1 = sourceLeft ? -1 : 1;
+      const dir2 = sourceLeft ? 1 : -1;
       const dx = Math.max(48, Math.abs(x2 - x1) / 2);
       const my1 = y1 + lane;
       const my2 = y2 + lane;
-      const d = `M ${x1} ${my1} C ${x1 + dx} ${my1}, ${x2 - dx} ${my2}, ${x2} ${my2}`;
+      const d = `M ${x1} ${my1} C ${x1 + dir1 * dx} ${my1}, ${x2 + dir2 * dx} ${my2}, ${x2} ${my2}`;
       const midX = (x1 + x2) / 2;
       const midY = (my1 + my2) / 2;
       return { r, i, d, x1, y1: my1, x2, y2: my2, midX, midY, sk, tk };
     });
-  }, [visibleRelations, filtered, positions, opts]);
+  }, [visibleRelations, filtered, positions, opts, relatedCols]);
 
   // ── export ──
   function exportSvg() {
@@ -462,7 +741,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x + NODE_W);
-      maxY = Math.max(maxY, p.y + nodeHeight(t, opts));
+      maxY = Math.max(maxY, p.y + (tableHeights.get(tkey(t.schema, t.name)) ?? heightOf(t, opts, relatedCols)));
     }
     const W = maxX - minX + 80;
     const H = maxY - minY + 80;
@@ -470,20 +749,21 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(W)}" height="${Math.round(H)}" viewBox="0 0 ${Math.round(W)} ${Math.round(H)}"><rect width="100%" height="100%" fill="#070b14"/>`;
     edges.forEach((e) => {
       if (!e) return;
-      s += `<path d="M ${e.x1 - minX + 40} ${e.y1 - minY + 40} C ${e.x1 - minX + 40 + 48} ${e.y1 - minY + 40}, ${e.x2 - minX + 40 - 48} ${e.y2 - minY + 40}, ${e.x2 - minX + 40} ${e.y2 - minY + 40}" stroke="#22d3ee" stroke-opacity="0.55" stroke-width="1.6" fill="none"/>`;
+      s += `<path d="${e.d}" transform="translate(${-minX + 40} ${-minY + 40})" stroke="#22d3ee" stroke-opacity="0.55" stroke-width="1.6" fill="none"/>`;
     });
     for (const t of filtered) {
       const p = positions[tkey(t.schema, t.name)];
       if (!p) continue;
       const px = p.x - minX + 40;
       const py = p.y - minY + 40;
-      const h = nodeHeight(t, opts);
+      const cols = displayColumns(t, relatedCols, opts);
+      const h = tableHeight(t, opts, cols.length);
       const rh = rowHeight(opts);
       const header = opts.showRowCounts ? HEADER_H_WITH_META : HEADER_H_SLIM;
       s += `<g><rect x="${px}" y="${py}" width="${NODE_W}" height="${h}" rx="14" fill="#0d1424" stroke="rgba(148,163,184,0.25)"/>`;
       s += `<text x="${px + 12}" y="${py + 20}" fill="#94a3b8" font-size="10" font-family="monospace">${esc(t.schema)}</text>`;
       s += `<text x="${px + 12}" y="${py + 36}" fill="#ffffff" font-size="13" font-weight="bold" font-family="sans-serif">${esc(t.name)}</text>`;
-      t.columns.forEach((c, idx) => {
+      cols.forEach((c, idx) => {
         const cy = py + header + idx * rh + rh / 2 + 4;
         s += `<text x="${px + 12}" y="${cy}" fill="#e2e8f0" font-size="11" font-family="monospace">${esc((c.is_primary ? "◆ " : "") + c.name)}</text>`;
         if (opts.showTypes) s += `<text x="${px + NODE_W - 12}" y="${cy}" fill="#22d3ee" font-size="10" text-anchor="end" font-family="monospace">${esc(shortType(c.data_type))}</text>`;
@@ -600,12 +880,33 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
           value={layoutMode}
           onChange={(e) => setLayoutMode(e.target.value as LayoutMode)}
           className="h-8 rounded-lg border border-edge bg-void px-2 text-xs text-slate-300 outline-none"
-          title="Layout"
+          title="Layout — Auto groups related tables so FK lines stay short"
         >
+          <option value="auto">Auto (related)</option>
           <option value="grid">Grid layout</option>
           <option value="schema">By schema</option>
           <option value="hub">Hub &amp; spokes</option>
         </select>
+
+        <button
+          onClick={() => {
+            setOpts((o) => ({ ...o, relationsOnly: !o.relationsOnly }));
+            fittedKey.current = null;
+          }}
+          className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition ${
+            opts.relationsOnly ? "border-neon/40 bg-neon/10 text-white" : "border-edge bg-white/5 text-slate-300 hover:bg-white/10"
+          }`}
+          title="Relations only — hide columns that aren't PKs, FKs, or link targets"
+        >
+          <EyeOff size={13} /> {opts.relationsOnly ? "Keys only" : "All columns"}
+        </button>
+        <button
+          onClick={relayout}
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-edge bg-white/5 px-2.5 text-xs text-slate-300 hover:bg-white/10"
+          title="Re-run the layout (clears manual drags)"
+        >
+          <RotateCcw size={13} /> Relayout
+        </button>
 
         <button
           onClick={() => setShowOpts((v) => !v)}
@@ -624,6 +925,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
       {showOpts && (
         <div className="shrink-0 border-b border-edge bg-panel2/80 px-3 py-2">
           <div className="grid grid-cols-2 gap-1 md:grid-cols-4">
+            <Toggle label="Relations only" hint="hide columns without FK links" checked={opts.relationsOnly} onChange={(v) => setOpts((o) => ({ ...o, relationsOnly: v }))} />
             <Toggle label="Column types" hint="e.g. uuid, timestamptz" checked={opts.showTypes} onChange={(v) => setOpts((o) => ({ ...o, showTypes: v }))} />
             <Toggle label="Nullability" hint="NOT NULL vs nullable dots" checked={opts.showNullable} onChange={(v) => setOpts((o) => ({ ...o, showNullable: v }))} />
             <Toggle label="Defaults" hint="SHOW column DEFAULT exprs" checked={opts.showDefaults} onChange={(v) => setOpts((o) => ({ ...o, showDefaults: v }))} />
@@ -744,12 +1046,13 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
               const key = tkey(t.schema, t.name);
               const p = positions[key];
               if (!p) return null;
-              const h = nodeHeight(t, opts);
+              const cols = displayColumns(t, relatedCols, opts);
               const rh = rowHeight(opts);
               const accent = opts.colorBySchema ? schemaColor(t.schema, schemas) : "#22d3ee";
               const isSel = selected === key;
               const fkCols = fkByTable.get(key) ?? new Set<string>();
               const isView = t.kind !== "table";
+              const hiddenCount = t.columns.length - cols.length;
               return (
                 <div
                   key={key}
@@ -792,12 +1095,12 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
                           <span className="text-slate-700">·</span>
                           <span>{t.size_pretty}</span>
                           <span className="text-slate-700">·</span>
-                          <span>{t.columns.length} cols</span>
+                          <span>{opts.relationsOnly && hiddenCount > 0 ? `${cols.length}/${t.columns.length} cols` : `${t.columns.length} cols`}</span>
                         </div>
                       )}
                     </div>
                     <div className="border-t border-white/[0.06]">
-                      {t.columns.map((c) => {
+                      {cols.map((c) => {
                         const isPk = c.is_primary;
                         const isFk = fkCols.has(c.name);
                         return (
@@ -838,6 +1141,26 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
                           </div>
                         );
                       })}
+                      {cols.length === 0 && (
+                        <div
+                          className="flex items-center px-3 font-mono text-[10.5px] italic text-slate-500"
+                          style={{ height: EMPTY_COLS_PLACEHOLDER_H }}
+                        >
+                          no key columns — {t.columns.length} hidden
+                        </div>
+                      )}
+                      {hiddenCount > 0 && cols.length > 0 && (
+                        <button
+                          className="flex w-full items-center justify-center gap-1 px-3 py-1 font-mono text-[10px] text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-300"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpts((o) => ({ ...o, relationsOnly: false }));
+                          }}
+                          title={`Show all ${t.columns.length} columns`}
+                        >
+                          +{hiddenCount} more column{hiddenCount === 1 ? "" : "s"} — show all
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -904,7 +1227,7 @@ export default function ErDiagramView({ connected }: { connected: boolean }) {
 
       {/* footer */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-edge bg-panel px-3 py-1.5 text-[11px] text-slate-500">
-        <span className="hidden md:inline">Drag background to pan · scroll to zoom · drag tables to arrange · click a table to isolate its links</span>
+        <span className="hidden md:inline">Drag background to pan · scroll to zoom · drag tables to arrange · click a table to isolate its links · Relayout clears manual drags</span>
         <span className="md:hidden">Pan, zoom &amp; drag tables to explore</span>
         <div className="flex-1" />
         <button onClick={load} className="flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-white/5 hover:text-slate-300">

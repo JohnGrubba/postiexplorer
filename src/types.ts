@@ -112,6 +112,8 @@ export interface ErDetailOptions {
   showIsolated: boolean;
   showRelationLabels: boolean;
   colorBySchema: boolean;
+  /** Compact mode: show only PK / FK / linked columns, hide the rest. */
+  relationsOnly: boolean;
 }
 
 // ── Extension points for future features (keep stable API) ──
