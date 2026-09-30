@@ -10,7 +10,7 @@
 //! validated; wiring `postgres-native-tls` / `postgres-openssl` later is a
 //! ~15-line change inside `connect_client()` (search for TLS TODO).
 
-use std::{collections::HashMap, sync::Mutex, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, sync::Mutex, time::Instant};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use tokio_postgres::{Client, NoTls, Row};
@@ -33,7 +33,11 @@ impl Default for DbState {
 fn conn_string(p: &ConnectionProfile) -> String {
     // Empty database = "choose after connecting" → land on the `postgres`
     // maintenance DB; the frontend then offers the database picker.
-    let db = if p.database.trim().is_empty() { "postgres" } else { &p.database };
+    let db = if p.database.trim().is_empty() {
+        "postgres"
+    } else {
+        &p.database
+    };
     format!(
         "host={} port={} user={} password={} dbname={} connect_timeout=8",
         p.host,
@@ -114,7 +118,12 @@ fn validate_ctid(s: &str) -> Result<(), String> {
         Some(pair) => {
             let mut parts = pair.split(',');
             let ok = match (parts.next(), parts.next(), parts.next()) {
-                (Some(a), Some(b), None) => !a.is_empty() && !b.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit()),
+                (Some(a), Some(b), None) => {
+                    !a.is_empty()
+                        && !b.is_empty()
+                        && a.bytes().all(|c| c.is_ascii_digit())
+                        && b.bytes().all(|c| c.is_ascii_digit())
+                }
                 _ => false,
             };
             if ok {
@@ -176,7 +185,9 @@ fn cell_to_json(row: &Row, idx: usize) -> serde_json::Value {
         "json" | "jsonb" => opt!(serde_json::Value),
         "bytea" => {
             if let Ok(v) = row.try_get::<_, Option<Vec<u8>>>(idx) {
-                return v.map(|b| json!(format!("\\x{}", hex(&b)))).unwrap_or(Value::Null);
+                return v
+                    .map(|b| json!(format!("\\x{}", hex(&b))))
+                    .unwrap_or(Value::Null);
             }
         }
         "date" => opt!(NaiveDate),
@@ -205,9 +216,20 @@ fn rows_to_json(rows: &[Row]) -> (Vec<String>, Vec<String>, Vec<Vec<serde_json::
     if rows.is_empty() {
         return (vec![], vec![], vec![]);
     }
-    let columns: Vec<String> = rows[0].columns().iter().map(|c| c.name().to_string()).collect();
-    let types: Vec<String> = rows[0].columns().iter().map(|c| c.type_().name().to_string()).collect();
-    let data = rows.iter().map(|r| (0..r.len()).map(|i| cell_to_json(r, i)).collect()).collect();
+    let columns: Vec<String> = rows[0]
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect();
+    let types: Vec<String> = rows[0]
+        .columns()
+        .iter()
+        .map(|c| c.type_().name().to_string())
+        .collect();
+    let data = rows
+        .iter()
+        .map(|r| (0..r.len()).map(|i| cell_to_json(r, i)).collect())
+        .collect();
     (columns, types, data)
 }
 
@@ -242,7 +264,10 @@ pub async fn test_connection(profile: ConnectionProfile) -> TestConnectionResult
     }
 }
 
-pub async fn open_connection(state: &DbState, profile: ConnectionProfile) -> Result<String, String> {
+pub async fn open_connection(
+    state: &DbState,
+    profile: ConnectionProfile,
+) -> Result<String, String> {
     let client = connect_client(&profile).await?;
     client.query_one("SELECT 1", &[]).await.map_err(pg_err)?;
     let id = Uuid::new_v4().to_string();
@@ -258,7 +283,10 @@ pub fn close_connection(state: &DbState, connection_id: &str) {
     state.connections.lock().unwrap().remove(connection_id);
 }
 
-fn client_for(state: &DbState, connection_id: &str) -> Result<Arc<tokio::sync::Mutex<Client>>, String> {
+fn client_for(
+    state: &DbState,
+    connection_id: &str,
+) -> Result<Arc<tokio::sync::Mutex<Client>>, String> {
     state
         .connections
         .lock()
@@ -268,7 +296,10 @@ fn client_for(state: &DbState, connection_id: &str) -> Result<Arc<tokio::sync::M
         .ok_or_else(|| "not connected (stale connection id)".to_string())
 }
 
-pub async fn op_list_databases(state: &DbState, connection_id: &str) -> Result<Vec<DatabaseEntry>, String> {
+pub async fn op_list_databases(
+    state: &DbState,
+    connection_id: &str,
+) -> Result<Vec<DatabaseEntry>, String> {
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
     let rows = client
@@ -284,14 +315,19 @@ pub async fn op_list_databases(state: &DbState, connection_id: &str) -> Result<V
         .into_iter()
         .map(|r| DatabaseEntry {
             name: r.get(0),
-            size_pretty: r.get::<_, Option<String>>(1).unwrap_or_else(|| "—".to_string()),
+            size_pretty: r
+                .get::<_, Option<String>>(1)
+                .unwrap_or_else(|| "—".to_string()),
             owner: r.get::<_, Option<String>>(2).unwrap_or_default(),
             can_connect: r.get::<_, Option<bool>>(3).unwrap_or(false),
         })
         .collect())
 }
 
-pub async fn op_list_schemas(state: &DbState, connection_id: &str) -> Result<Vec<SchemaEntry>, String> {
+pub async fn op_list_schemas(
+    state: &DbState,
+    connection_id: &str,
+) -> Result<Vec<SchemaEntry>, String> {
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
     let rows = client
@@ -317,7 +353,11 @@ pub async fn op_list_schemas(state: &DbState, connection_id: &str) -> Result<Vec
         .collect())
 }
 
-pub async fn op_list_tables(state: &DbState, connection_id: &str, schema: &str) -> Result<Vec<TableEntry>, String> {
+pub async fn op_list_tables(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+) -> Result<Vec<TableEntry>, String> {
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
     let rows = client
@@ -345,7 +385,9 @@ pub async fn op_list_tables(state: &DbState, connection_id: &str, schema: &str) 
             // pg_total_relation_size can return NULL for a relation dropped
             // concurrently (parallel tests / other sessions) — never let a
             // missing size crash the whole tree.
-            size_pretty: r.get::<_, Option<String>>(3).unwrap_or_else(|| "—".to_string()),
+            size_pretty: r
+                .get::<_, Option<String>>(3)
+                .unwrap_or_else(|| "—".to_string()),
             can_select: r.get::<_, Option<bool>>(4).unwrap_or(false),
         })
         .collect())
@@ -399,10 +441,15 @@ async fn fetch_relkind(client: &Client, schema: &str, table: &str) -> Result<Str
         )
         .await
         .map_err(pg_err)?;
-    row.map(|r| r.get(0)).ok_or_else(|| format!("table \"{schema}\".\"{table}\" not found"))
+    row.map(|r| r.get(0))
+        .ok_or_else(|| format!("table \"{schema}\".\"{table}\" not found"))
 }
 
-async fn fetch_primary_keys(client: &Client, schema: &str, table: &str) -> Result<Vec<String>, String> {
+async fn fetch_primary_keys(
+    client: &Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<String>, String> {
     let rows = client
         .query(
             "SELECT a.attname FROM pg_index i
@@ -418,7 +465,11 @@ async fn fetch_primary_keys(client: &Client, schema: &str, table: &str) -> Resul
     Ok(rows.into_iter().map(|r| r.get(0)).collect())
 }
 
-async fn fetch_column_defs(client: &Client, schema: &str, table: &str) -> Result<(Vec<String>, Vec<String>), String> {
+async fn fetch_column_defs(
+    client: &Client,
+    schema: &str,
+    table: &str,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let rows = client
         .query(
             "SELECT column_name, data_type FROM information_schema.columns
@@ -427,7 +478,10 @@ async fn fetch_column_defs(client: &Client, schema: &str, table: &str) -> Result
         )
         .await
         .map_err(pg_err)?;
-    Ok((rows.iter().map(|r| r.get(0)).collect(), rows.iter().map(|r| r.get(1)).collect()))
+    Ok((
+        rows.iter().map(|r| r.get(0)).collect(),
+        rows.iter().map(|r| r.get(1)).collect(),
+    ))
 }
 
 pub async fn op_get_table_data(
@@ -450,7 +504,9 @@ pub async fn op_get_table_data(
     let relkind = fetch_relkind(&client, schema, table).await?;
     // Only heap relations carry a stable ctid we can target for UPDATE/DELETE.
     let mut editable = matches!(relkind.as_str(), "r" | "p" | "f");
-    let primary_keys = fetch_primary_keys(&client, schema, table).await.unwrap_or_default();
+    let primary_keys = fetch_primary_keys(&client, schema, table)
+        .await
+        .unwrap_or_default();
 
     // Per-privilege gating so the frontend can disable buttons up-front
     // instead of surfacing "permission denied" after the fact.
@@ -478,7 +534,11 @@ pub async fn op_get_table_data(
     let mut order_sql = String::new();
     if let Some(col) = order_by.filter(|c| !c.is_empty()) {
         let qc = quote_ident(&col)?;
-        let dir = if order_dir.as_deref() == Some("DESC") { "DESC" } else { "ASC" };
+        let dir = if order_dir.as_deref() == Some("DESC") {
+            "DESC"
+        } else {
+            "ASC"
+        };
         order_sql.push_str(&format!(" ORDER BY {qc} {dir}"));
     }
 
@@ -513,8 +573,18 @@ pub async fn op_get_table_data(
                 }
                 let ncols = rows[0].len();
                 let ctid_idx = ncols - 1;
-                let columns: Vec<String> = rows[0].columns().iter().take(ctid_idx).map(|c| c.name().to_string()).collect();
-                let column_types: Vec<String> = rows[0].columns().iter().take(ctid_idx).map(|c| c.type_().name().to_string()).collect();
+                let columns: Vec<String> = rows[0]
+                    .columns()
+                    .iter()
+                    .take(ctid_idx)
+                    .map(|c| c.name().to_string())
+                    .collect();
+                let column_types: Vec<String> = rows[0]
+                    .columns()
+                    .iter()
+                    .take(ctid_idx)
+                    .map(|c| c.type_().name().to_string())
+                    .collect();
                 let mut data = Vec::with_capacity(rows.len());
                 let mut ctids = Vec::with_capacity(rows.len());
                 for r in &rows {
@@ -604,7 +674,11 @@ pub async fn op_insert_row(
         let sql = format!("INSERT INTO {qs}.{qt} DEFAULT VALUES");
         let handle = client_for(state, connection_id)?;
         let client = handle.lock().await;
-        return client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64);
+        return client
+            .execute(sql.as_str(), &[])
+            .await
+            .map_err(pg_err)
+            .map(|n| n as u64);
     }
     let mut cols = Vec::with_capacity(values.len());
     let mut lits = Vec::with_capacity(values.len());
@@ -615,10 +689,18 @@ pub async fn op_insert_row(
         cols.push(quote_ident(k)?);
         lits.push(json_to_literal(&values[k]));
     }
-    let sql = format!("INSERT INTO {qs}.{qt} ({}) VALUES ({})", cols.join(", "), lits.join(", "));
+    let sql = format!(
+        "INSERT INTO {qs}.{qt} ({}) VALUES ({})",
+        cols.join(", "),
+        lits.join(", ")
+    );
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_update_row(
@@ -649,12 +731,19 @@ pub async fn op_update_row(
         let qc = quote_ident(k)?;
         sets.push(format!("{qc} = DEFAULT"));
     }
-    let sql = format!("UPDATE {qs}.{qt} SET {} WHERE ctid = {}", sets.join(", "), quote_literal(&ctid));
+    let sql = format!(
+        "UPDATE {qs}.{qt} SET {} WHERE ctid = {}",
+        sets.join(", "),
+        quote_literal(&ctid)
+    );
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
     let n = client.execute(sql.as_str(), &[]).await.map_err(pg_err)? as u64;
     if n == 0 {
-        return Err("row no longer exists (it may have been updated or deleted) — please refresh".to_string());
+        return Err(
+            "row no longer exists (it may have been updated or deleted) — please refresh"
+                .to_string(),
+        );
     }
     Ok(n)
 }
@@ -677,20 +766,40 @@ pub async fn op_delete_rows(
     }
     let qs = quote_ident(schema)?;
     let qt = quote_ident(table)?;
-    let list = ctids.iter().map(|c| quote_literal(c)).collect::<Vec<_>>().join(", ");
+    let list = ctids
+        .iter()
+        .map(|c| quote_literal(c))
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!("DELETE FROM {qs}.{qt} WHERE ctid IN ({list})");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
-pub async fn op_execute_sql(state: &DbState, connection_id: &str, sql: &str) -> Result<QueryResult, String> {
+pub async fn op_execute_sql(
+    state: &DbState,
+    connection_id: &str,
+    sql: &str,
+) -> Result<QueryResult, String> {
     let sql = sql.trim();
     if sql.is_empty() {
         return Err("empty query".to_string());
     }
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
+    execute_single(&client, sql).await
+}
+
+async fn execute_single(client: &Client, sql: &str) -> Result<QueryResult, String> {
+    let sql = sql.trim();
+    if sql.is_empty() {
+        return Err("empty query".to_string());
+    }
     let t0 = Instant::now();
     let stmt = client.prepare(sql).await.map_err(pg_err)?;
     let command = sql.split_whitespace().next().unwrap_or("").to_uppercase();
@@ -703,7 +812,11 @@ pub async fn op_execute_sql(state: &DbState, connection_id: &str, sql: &str) -> 
             rows: vec![],
             row_count: n as usize,
             execution_ms: ms_of(t0),
-            command: if command.is_empty() { "OK".into() } else { command },
+            command: if command.is_empty() {
+                "OK".into()
+            } else {
+                command
+            },
             notice: Some(format!("{n} rows affected")),
         });
     }
@@ -715,22 +828,374 @@ pub async fn op_execute_sql(state: &DbState, connection_id: &str, sql: &str) -> 
         columns,
         rows: data,
         execution_ms: ms,
-        command: if command.is_empty() { "SELECT".into() } else { command },
+        command: if command.is_empty() {
+            "SELECT".into()
+        } else {
+            command
+        },
         notice: None,
     })
+}
+
+// ── multi-statement batches ────────────────────────────────────
+// The SQL editor sends the whole buffer; PostgreSQL's extended protocol
+// (`prepare`) only accepts a single statement, so split here and run each
+// part sequentially in autocommit (same semantics as psql without an
+// explicit transaction). The splitter is quote/comment aware so `;`
+// inside string literals, quoted identifiers, dollar-quoted function
+// bodies and comments never split.
+
+/// Split SQL text on top-level `;`, ignoring semicolons inside
+/// single-quoted strings (incl. `E'...'` escapes), double-quoted
+/// identifiers, line/block comments and `$tag$...$tag$` dollar quotes.
+/// Returns trimmed non-empty statements.
+fn split_statements(sql: &str) -> Vec<String> {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut i = 0;
+    let n = chars.len();
+    while i < n {
+        let c = chars[i];
+        // Line comment `-- ...` (only outside literals — we are at top level here).
+        if c == '-' && i + 1 < n && chars[i + 1] == '-' {
+            cur.push('-');
+            cur.push('-');
+            let mut j = i + 2;
+            while j < n && chars[j] != '\n' {
+                cur.push(chars[j]);
+                j += 1;
+            }
+            i = j;
+            continue;
+        }
+        // Block comment `/* ... */` with nesting (PostgreSQL nests them).
+        if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+            let mut depth = 1usize;
+            cur.push(c);
+            cur.push(chars[i + 1]);
+            i += 2;
+            while i < n && depth > 0 {
+                if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    depth += 1;
+                    cur.push('/');
+                    cur.push('*');
+                    i += 2;
+                } else if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    depth -= 1;
+                    cur.push('*');
+                    cur.push('/');
+                    i += 2;
+                } else {
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        // Single-quoted string. Detect `E'...'` prefix for backslash escapes:
+        // the last non-space char before the quote is E/e preceded by a
+        // non-identifier char (or start).
+        if c == '\'' {
+            let trimmed = cur.trim_end();
+            let esc = trimmed
+                .strip_suffix(|ch: char| ch == 'E' || ch == 'e')
+                .map(|rest| {
+                    rest.chars()
+                        .last()
+                        .map(|p| !p.is_alphanumeric() && p != '_')
+                        .unwrap_or(true)
+                })
+                .unwrap_or(false);
+            cur.push(c);
+            i += 1;
+            while i < n {
+                let d = chars[i];
+                cur.push(d);
+                if esc && d == '\\' && i + 1 < n {
+                    cur.push(chars[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                if d == '\'' {
+                    if i + 1 < n && chars[i + 1] == '\'' {
+                        cur.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // Double-quoted identifier with `""` escape.
+        if c == '"' {
+            cur.push(c);
+            i += 1;
+            while i < n {
+                cur.push(chars[i]);
+                if chars[i] == '"' {
+                    if i + 1 < n && chars[i + 1] == '"' {
+                        cur.push('"');
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // Dollar-quoted string `$tag$...$tag$` (tag empty or identifier-like).
+        if c == '$' {
+            if let Some((tag, delim_len)) = parse_dollar_open(&chars, i) {
+                let close: String = format!("${tag}$");
+                cur.push_str(&close);
+                i += delim_len;
+                while i < n {
+                    if matches_close(&chars, i, &close) {
+                        for ch in close.chars() {
+                            cur.push(ch);
+                        }
+                        i += close.chars().count();
+                        break;
+                    }
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+                continue;
+            }
+            cur.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ';' {
+            let stmt = cur.trim().to_string();
+            if !stmt.is_empty() {
+                out.push(stmt);
+            }
+            cur.clear();
+            i += 1;
+            continue;
+        }
+        cur.push(c);
+        i += 1;
+    }
+    let tail = cur.trim().to_string();
+    if !tail.is_empty() {
+        out.push(tail);
+    }
+    out
+}
+
+/// Parse a `$tag$` opening delimiter at `chars[i]`.
+/// Returns the tag and its char length (`$$` → ("", 2)).
+fn parse_dollar_open(chars: &[char], i: usize) -> Option<(String, usize)> {
+    if chars[i] != '$' {
+        return None;
+    }
+    let mut j = i + 1;
+    let mut tag = String::new();
+    while j < chars.len() && chars[j] != '$' {
+        let ch = chars[j];
+        if ch.is_alphanumeric() || ch == '_' {
+            // Tags must not start with a digit (`$1` is a parameter, not a quote).
+            if tag.is_empty() && ch.is_ascii_digit() {
+                return None;
+            }
+            if tag.len() >= 32 {
+                return None;
+            }
+            tag.push(ch);
+            j += 1;
+        } else {
+            return None;
+        }
+    }
+    if j >= chars.len() || chars[j] != '$' {
+        return None;
+    }
+    // `$1` / `$12` (bare parameter) has no second `$` — handled above by
+    // the digit check; `$tag` without closing `$` is not a quote.
+    let delim_len = j - i + 1;
+    Some((tag, delim_len))
+}
+
+fn matches_close(chars: &[char], i: usize, close: &str) -> bool {
+    let need: Vec<char> = close.chars().collect();
+    if i + need.len() > chars.len() {
+        return false;
+    }
+    chars[i..i + need.len()].iter().collect::<String>() == close
+}
+
+/// True when a statement holds nothing but whitespace and comments.
+fn statement_is_empty(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let n = chars.len();
+    while i < n {
+        let c = chars[i];
+        if c.is_whitespace() || c == ';' {
+            i += 1;
+            continue;
+        }
+        if c == '-' && i + 1 < n && chars[i + 1] == '-' {
+            while i < n && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == '/' && i + 1 < n && chars[i + 1] == '*' {
+            let mut depth = 1usize;
+            i += 2;
+            while i < n && depth > 0 {
+                if chars[i] == '/' && i + 1 < n && chars[i + 1] == '*' {
+                    depth += 1;
+                    i += 2;
+                } else if chars[i] == '*' && i + 1 < n && chars[i + 1] == '/' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+pub async fn op_execute_sql_batch(
+    state: &DbState,
+    connection_id: &str,
+    sql: &str,
+) -> Result<BatchQueryResult, String> {
+    if sql.trim().is_empty() {
+        return Err("empty query".to_string());
+    }
+    let stmts: Vec<String> = split_statements(sql)
+        .into_iter()
+        .filter(|s| !statement_is_empty(s))
+        .collect();
+    if stmts.is_empty() {
+        return Err("empty query".to_string());
+    }
+    if stmts.len() > 100 {
+        return Err("too many statements (max 100 per batch)".to_string());
+    }
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    let t0 = Instant::now();
+    let mut results = Vec::with_capacity(stmts.len());
+    for (idx, stmt) in stmts.iter().enumerate() {
+        match execute_single(&client, stmt).await {
+            Ok(r) => results.push(r),
+            Err(e) => return Err(format!("statement {} failed: {}", idx + 1, e)),
+        }
+    }
+    Ok(BatchQueryResult {
+        results,
+        execution_ms: t0.elapsed().as_millis() as u64,
+    })
+}
+
+// ── CSV import: multi-row INSERT from parsed frontend rows ─────
+// The frontend parses CSV (quotes, BOM, newlines) and sends strings;
+// PostgreSQL casts quoted literals (`'123'` → int, `'true'` → bool)
+// automatically, so no per-type conversion is needed here. Identifiers
+// are quoted, values rendered as literals — an injection attempt in a
+// cell lands as a string literal, never as SQL.
+
+pub async fn op_import_rows(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+    columns: Vec<String>,
+    rows: Vec<Vec<serde_json::Value>>,
+) -> Result<u64, String> {
+    if columns.is_empty() {
+        return Err("no columns provided".to_string());
+    }
+    if columns.len() > 100 {
+        return Err("too many columns (max 100)".to_string());
+    }
+    if rows.is_empty() {
+        return Err("no rows provided".to_string());
+    }
+    if rows.len() > 1000 {
+        return Err("too many rows per batch (max 1000 — split the import)".to_string());
+    }
+    let qs = quote_ident(schema)?;
+    let qt = quote_ident(table)?;
+    let mut seen = std::collections::HashSet::new();
+    let mut qcols = Vec::with_capacity(columns.len());
+    for c in &columns {
+        let t = c.trim();
+        if t.is_empty() {
+            return Err("column name is required".to_string());
+        }
+        if !seen.insert(t.to_lowercase()) {
+            return Err(format!("duplicate column: {t}"));
+        }
+        qcols.push(quote_ident(t)?);
+    }
+    for (ri, r) in rows.iter().enumerate() {
+        if r.len() != columns.len() {
+            return Err(format!(
+                "row {} has {} values, expected {}",
+                ri + 1,
+                r.len(),
+                columns.len()
+            ));
+        }
+    }
+    let mut tuples = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let lits: Vec<String> = r.iter().map(json_to_literal).collect();
+        tuples.push(format!("({})", lits.join(", ")));
+    }
+    let sql = format!(
+        "INSERT INTO {qs}.{qt} ({}) VALUES {}",
+        qcols.join(", "),
+        tuples.join(", ")
+    );
+    // Guard against absurdly large statements (10 MB cap).
+    if sql.len() > 10_000_000 {
+        return Err("import batch too large (max ~10 MB per batch — split the import)".to_string());
+    }
+    let handle = client_for(state, connection_id)?;
+    let client = handle.lock().await;
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_server_info(state: &DbState, connection_id: &str) -> Result<ServerInfo, String> {
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    let version: String = client.query_one("SELECT version()", &[]).await.map_err(pg_err)?.get(0);
+    let version: String = client
+        .query_one("SELECT version()", &[])
+        .await
+        .map_err(pg_err)?
+        .get(0);
     let db: String = client
         .query_one("SELECT current_database()", &[])
         .await
         .map_err(pg_err)?
         .get(0);
     let size: String = client
-        .query_one("SELECT pg_size_pretty(pg_database_size(current_database()))", &[])
+        .query_one(
+            "SELECT pg_size_pretty(pg_database_size(current_database()))",
+            &[],
+        )
         .await
         .map_err(pg_err)?
         .get(0);
@@ -744,7 +1209,11 @@ pub async fn op_server_info(state: &DbState, connection_id: &str) -> Result<Serv
         .await
         .map_err(pg_err)?
         .get(0);
-    let maxc: String = client.query_one("SHOW max_connections", &[]).await.map_err(pg_err)?.get(0);
+    let maxc: String = client
+        .query_one("SHOW max_connections", &[])
+        .await
+        .map_err(pg_err)?
+        .get(0);
     let up: String = client
         .query_one("SELECT COALESCE(EXTRACT(EPOCH FROM (now() - pg_postmaster_start_time()))::bigint::text, '0')", &[])
         .await
@@ -753,7 +1222,12 @@ pub async fn op_server_info(state: &DbState, connection_id: &str) -> Result<Serv
     let secs: i64 = up.parse().unwrap_or(0);
     Ok(ServerInfo {
         version,
-        uptime: format!("{}d {:02}:{:02}", secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60),
+        uptime: format!(
+            "{}d {:02}:{:02}",
+            secs / 86400,
+            (secs % 86400) / 3600,
+            (secs % 3600) / 60
+        ),
         database: db,
         size_pretty: size,
         table_count: tables,
@@ -823,7 +1297,10 @@ pub async fn op_get_er_model(state: &DbState, connection_id: &str) -> Result<ErM
             default_value: r.get(5),
             is_primary: r.get(6),
         };
-        cols_by_table.entry((schema, table)).or_default().push(entry);
+        cols_by_table
+            .entry((schema, table))
+            .or_default()
+            .push(entry);
     }
 
     let mut tables = Vec::with_capacity(table_rows.len());
@@ -832,9 +1309,20 @@ pub async fn op_get_er_model(state: &DbState, connection_id: &str) -> Result<ErM
         let name: String = r.get(1);
         let kind: String = r.get(2);
         let rows_estimate: i64 = r.get(3);
-        let size_pretty: String = r.get::<_, Option<String>>(4).unwrap_or_else(|| "—".to_string());
-        let columns = cols_by_table.remove(&(schema.clone(), name.clone())).unwrap_or_default();
-        tables.push(ErTable { schema, name, kind, rows_estimate, size_pretty, columns });
+        let size_pretty: String = r
+            .get::<_, Option<String>>(4)
+            .unwrap_or_else(|| "—".to_string());
+        let columns = cols_by_table
+            .remove(&(schema.clone(), name.clone()))
+            .unwrap_or_default();
+        tables.push(ErTable {
+            schema,
+            name,
+            kind,
+            rows_estimate,
+            size_pretty,
+            columns,
+        });
     }
 
     // 3) foreign-key edges (one row per column pair, supports composite FKs)
@@ -918,7 +1406,15 @@ pub async fn op_get_table_privileges(
         )
         .await
         .map_err(pg_err)?;
-    let (select, insert, update, delete, truncate, references, trigger): (bool, bool, bool, bool, bool, bool, bool) = (
+    let (select, insert, update, delete, truncate, references, trigger): (
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+    ) = (
         priv_row.get(0),
         priv_row.get(1),
         priv_row.get(2),
@@ -1127,16 +1623,29 @@ pub async fn op_create_table(
     let sql = format!("CREATE TABLE {qs}.{qt} ({})", defs.join(", "));
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
-pub async fn op_drop_table(state: &DbState, connection_id: &str, schema: &str, table: &str) -> Result<u64, String> {
+pub async fn op_drop_table(
+    state: &DbState,
+    connection_id: &str,
+    schema: &str,
+    table: &str,
+) -> Result<u64, String> {
     let qs = quote_ident(schema)?;
     let qt = quote_ident(table)?;
     let sql = format!("DROP TABLE {qs}.{qt}");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_add_column(
@@ -1152,7 +1661,11 @@ pub async fn op_add_column(
     let sql = format!("ALTER TABLE {qs}.{qt} ADD COLUMN {def}");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_drop_column(
@@ -1168,7 +1681,11 @@ pub async fn op_drop_column(
     let sql = format!("ALTER TABLE {qs}.{qt} DROP COLUMN {qc}");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_rename_column(
@@ -1189,7 +1706,11 @@ pub async fn op_rename_column(
     let sql = format!("ALTER TABLE {qs}.{qt} RENAME COLUMN {qo} TO {qn}");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_alter_column_type(
@@ -1207,7 +1728,11 @@ pub async fn op_alter_column_type(
     let sql = format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} TYPE {ty} USING {qc}::{ty}");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_set_column_nullable(
@@ -1221,11 +1746,19 @@ pub async fn op_set_column_nullable(
     let qs = quote_ident(schema)?;
     let qt = quote_ident(table)?;
     let qc = quote_ident(column)?;
-    let action = if nullable { "DROP NOT NULL" } else { "SET NOT NULL" };
+    let action = if nullable {
+        "DROP NOT NULL"
+    } else {
+        "SET NOT NULL"
+    };
     let sql = format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} {action}");
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }
 
 pub async fn op_set_column_default(
@@ -1239,7 +1772,11 @@ pub async fn op_set_column_default(
     let qs = quote_ident(schema)?;
     let qt = quote_ident(table)?;
     let qc = quote_ident(column)?;
-    let sql = match default_value.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let sql = match default_value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(expr) => {
             let valid = validate_default_expr(expr)?;
             format!("ALTER TABLE {qs}.{qt} ALTER COLUMN {qc} SET DEFAULT {valid}")
@@ -1248,5 +1785,9 @@ pub async fn op_set_column_default(
     };
     let handle = client_for(state, connection_id)?;
     let client = handle.lock().await;
-    client.execute(sql.as_str(), &[]).await.map_err(pg_err).map(|n| n as u64)
+    client
+        .execute(sql.as_str(), &[])
+        .await
+        .map_err(pg_err)
+        .map(|n| n as u64)
 }

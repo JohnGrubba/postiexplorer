@@ -75,6 +75,11 @@ export interface QueryResult {
   notice?: string;
 }
 
+export interface BatchQueryResult {
+  results: QueryResult[];
+  execution_ms: number;
+}
+
 export interface ServerInfo {
   version: string;
   uptime: string;
@@ -164,3 +169,8 @@ export interface FutureModule {
   label: string;
   enabled: boolean;
 }
+
+/** Max rows per `importRows` batch (mirrors the backend 1000-row cap). */
+export const IMPORT_BATCH_SIZE = 500;
+/** Max rows a table CSV export will pull (paged, 1000 at a time). */
+export const EXPORT_MAX_ROWS = 50000;

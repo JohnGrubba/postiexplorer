@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Pencil, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { deleteRows, getColumns, getTableData, insertRow, updateRow } from "../lib/api";
+import { buildCsv, downloadTextFile } from "../lib/download";
 import type { ColumnEntry, TableDataResult } from "../types";
+import { EXPORT_MAX_ROWS } from "../types";
 import DataGrid from "./DataGrid";
 import RowEditorDialog, { type EditorValues } from "./RowEditorDialog";
+import CsvImportDialog from "./CsvImportDialog";
 
 interface Props {
   schema: string | null;
@@ -42,6 +45,8 @@ export default function TableDataView({ schema, table }: Props) {
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [showInsert, setShowInsert] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [mutError, setMutError] = useState<string | null>(null);
 
@@ -70,6 +75,7 @@ export default function TableDataView({ schema, table }: Props) {
     setEditIndex(null);
     setShowInsert(false);
     setShowDelete(false);
+    setShowImport(false);
     setMutError(null);
     if (schema && table) load(0, pageSize, null, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -239,6 +245,44 @@ export default function TableDataView({ schema, table }: Props) {
     }
   }
 
+  async function openImport() {
+    setMutError(null);
+    try {
+      await ensureColumns();
+      setShowImport(true);
+    } catch (e) {
+      setMutError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** Export the whole table (paged, up to EXPORT_MAX_ROWS) as BOM CSV. */
+  async function handleExport() {
+    if (!schema || !table || !data || exporting) return;
+    setExporting(true);
+    setMutError(null);
+    try {
+      const total = Math.min(data.total, EXPORT_MAX_ROWS);
+      const all: unknown[][] = [];
+      let columns = data.columns;
+      const PAGE = 1000;
+      for (let off = 0; off < total; off += PAGE) {
+        const chunk = await getTableData(schema, table, Math.min(PAGE, total - off), off, orderBy, orderDir);
+        columns = chunk.columns;
+        all.push(...chunk.rows);
+        if (chunk.rows.length === 0) break;
+      }
+      const csv = buildCsv(columns, all);
+      await downloadTextFile(`${schema}_${table}.csv`, csv, "text/csv;charset=utf-8");
+      if (data.total > EXPORT_MAX_ROWS) {
+        setMutError(`Exported first ${EXPORT_MAX_ROWS.toLocaleString()} of ${data.total.toLocaleString()} rows (cap).`);
+      }
+    } catch (e) {
+      setMutError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const btn =
     "flex h-8 items-center gap-1.5 rounded-lg border border-edge bg-white/5 px-2.5 text-xs text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40";
   const iconBtn =
@@ -299,6 +343,22 @@ export default function TableDataView({ schema, table }: Props) {
         >
           <Trash2 size={13} /> Delete{selected.size > 1 ? ` (${selected.size})` : ""}
         </button>
+        <button
+          onClick={() => void handleExport()}
+          disabled={!data || data.total === 0 || exporting}
+          title={data && data.total > EXPORT_MAX_ROWS ? `Export first ${EXPORT_MAX_ROWS.toLocaleString()} rows as CSV` : "Export table as CSV"}
+          className={btn}
+        >
+          <Download size={13} /> {exporting ? "Exporting…" : "Export"}
+        </button>
+        <button
+          onClick={() => void openImport()}
+          disabled={!editable || !canInsert}
+          title={!editable ? "This relation is read-only" : !canInsert ? "Missing INSERT privilege on this table" : "Import CSV rows"}
+          className={btn}
+        >
+          <Upload size={13} /> Import
+        </button>
         <select
           value={pageSize}
           onChange={(e) => {
@@ -321,7 +381,7 @@ export default function TableDataView({ schema, table }: Props) {
       </div>
 
       {error && <div className="shrink-0 border-b border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</div>}
-      {mutError && !editIndex && !showInsert && !showDelete && (
+      {mutError && editIndex === null && !showInsert && !showDelete && !showImport && (
         <div className="shrink-0 border-b border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{mutError}</div>
       )}
 
@@ -473,6 +533,19 @@ export default function TableDataView({ schema, table }: Props) {
             </div>
           </div>
         </div>
+      )}
+
+      {showImport && schema && table && (
+        <CsvImportDialog
+          schema={schema}
+          table={table}
+          columns={cols}
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            setPage(0);
+            void load(0, pageSize);
+          }}
+        />
       )}
     </div>
   );

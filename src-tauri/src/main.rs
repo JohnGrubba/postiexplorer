@@ -11,7 +11,10 @@ async fn test_connection(profile: ConnectionProfile) -> TestConnectionResult {
 }
 
 #[tauri::command]
-async fn connect(state: tauri::State<'_, DbState>, profile: ConnectionProfile) -> Result<String, String> {
+async fn connect(
+    state: tauri::State<'_, DbState>,
+    profile: ConnectionProfile,
+) -> Result<String, String> {
     db::open_connection(&state, profile).await
 }
 
@@ -22,12 +25,18 @@ async fn disconnect(state: tauri::State<'_, DbState>, connection_id: String) -> 
 }
 
 #[tauri::command]
-async fn list_databases(state: tauri::State<'_, DbState>, connection_id: String) -> Result<Vec<DatabaseEntry>, String> {
+async fn list_databases(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+) -> Result<Vec<DatabaseEntry>, String> {
     db::op_list_databases(&state, &connection_id).await
 }
 
 #[tauri::command]
-async fn list_schemas(state: tauri::State<'_, DbState>, connection_id: String) -> Result<Vec<SchemaEntry>, String> {
+async fn list_schemas(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+) -> Result<Vec<SchemaEntry>, String> {
     db::op_list_schemas(&state, &connection_id).await
 }
 
@@ -62,12 +71,47 @@ async fn get_table_data(
     order_by: Option<String>,
     order_dir: Option<String>,
 ) -> Result<TableDataResult, String> {
-    db::op_get_table_data(&state, &connection_id, &schema, &table, limit, offset, order_by, order_dir).await
+    db::op_get_table_data(
+        &state,
+        &connection_id,
+        &schema,
+        &table,
+        limit,
+        offset,
+        order_by,
+        order_dir,
+    )
+    .await
 }
 
 #[tauri::command]
-async fn execute_sql(state: tauri::State<'_, DbState>, connection_id: String, sql: String) -> Result<QueryResult, String> {
+async fn execute_sql(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    sql: String,
+) -> Result<QueryResult, String> {
     db::op_execute_sql(&state, &connection_id, &sql).await
+}
+
+#[tauri::command]
+async fn execute_sql_batch(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    sql: String,
+) -> Result<BatchQueryResult, String> {
+    db::op_execute_sql_batch(&state, &connection_id, &sql).await
+}
+
+#[tauri::command]
+async fn import_rows(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+    schema: String,
+    table: String,
+    columns: Vec<String>,
+    rows: Vec<Vec<serde_json::Value>>,
+) -> Result<u64, String> {
+    db::op_import_rows(&state, &connection_id, &schema, &table, columns, rows).await
 }
 
 #[tauri::command]
@@ -91,7 +135,16 @@ async fn update_row(
     patch: std::collections::HashMap<String, serde_json::Value>,
     defaults: Vec<String>,
 ) -> Result<u64, String> {
-    db::op_update_row(&state, &connection_id, &schema, &table, ctid, patch, defaults).await
+    db::op_update_row(
+        &state,
+        &connection_id,
+        &schema,
+        &table,
+        ctid,
+        patch,
+        defaults,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -106,12 +159,18 @@ async fn delete_rows(
 }
 
 #[tauri::command]
-async fn get_server_info(state: tauri::State<'_, DbState>, connection_id: String) -> Result<ServerInfo, String> {
+async fn get_server_info(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+) -> Result<ServerInfo, String> {
     db::op_server_info(&state, &connection_id).await
 }
 
 #[tauri::command]
-async fn get_er_model(state: tauri::State<'_, DbState>, connection_id: String) -> Result<ErModel, String> {
+async fn get_er_model(
+    state: tauri::State<'_, DbState>,
+    connection_id: String,
+) -> Result<ErModel, String> {
     db::op_get_er_model(&state, &connection_id).await
 }
 
@@ -186,7 +245,15 @@ async fn rename_column(
     old_name: String,
     new_name: String,
 ) -> Result<u64, String> {
-    db::op_rename_column(&state, &connection_id, &schema, &table, &old_name, &new_name).await
+    db::op_rename_column(
+        &state,
+        &connection_id,
+        &schema,
+        &table,
+        &old_name,
+        &new_name,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -222,7 +289,15 @@ async fn set_column_default(
     column: String,
     default_value: Option<String>,
 ) -> Result<u64, String> {
-    db::op_set_column_default(&state, &connection_id, &schema, &table, &column, default_value).await
+    db::op_set_column_default(
+        &state,
+        &connection_id,
+        &schema,
+        &table,
+        &column,
+        default_value,
+    )
+    .await
 }
 
 fn main() {
@@ -241,6 +316,8 @@ fn main() {
             get_columns,
             get_table_data,
             execute_sql,
+            execute_sql_batch,
+            import_rows,
             insert_row,
             update_row,
             delete_rows,

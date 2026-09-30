@@ -54,7 +54,8 @@ Or build locally — see [BUILD.md](BUILD.md).
 | **Privileges** | `get_table_privileges` / `get_schema_privileges` (owner via role membership, superuser flag, `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`TRUNCATE`/`REFERENCES`/`TRIGGER`, `can_alter`/`can_drop`, `USAGE`/`CREATE`) surface as `editable` badges in Structure, `read-only` / `limited privileges` pills in Data, and disabled sidebar / dialog buttons — writes still fail server-side for bypass attempts (covered by a dedicated readonly-role live test) |
 | **ER Model** | Interactive diagram of all user tables + FK edges on a GPU-composited canvas edge layer (devicePixelRatio-crisp, geometric hit-testing): pan/zoom (25–220%), drag-to-arrange, fit-to-view, 4 auto-layouts (Auto `related` / Grid / By schema / Hub & spokes) with relayout, search across tables **and** columns, schema filter chips, click-to-isolate with dimming, click-to-copy table/column names, `+N more — show all` in compact mode, viewport culling + memoized nodes for large diagrams, SVG export + Mermaid copy (native save dialog on desktop) |
 | **ER detail toggles** | 9 toggles persisted to `localStorage`: relations-only (keys-only compact mode) · column types · nullability dots · defaults · row counts · views · isolated tables · relation labels (auto-throttled past 150 edges, hidden below 0.45× zoom) · schema colours |
-| **Query** | SQL editor (Ctrl/Cmd+Enter), results grid with type badges, per-profile+database persisted SQL/history/result (`localStorage`, debounced, result capped at 200 rows); 20-entry deduped history with clear + click-to-rerun; selection-following starter `SELECT * … LIMIT 100` until first edit/run; timing + row count + command + `rows affected` notice for writes; CSV export with BOM for Excel (native Save dialog via `@tauri-apps/plugin-dialog` + `plugin-fs` on desktop, anchor download in browser) |
+| **Query** | SQL editor (Ctrl/Cmd+Enter) with **multi-statement batches** (`;`-separated, quote/comment/dollar-quote aware splitter in `db.rs`, max 100 statements, autocommit like psql, failures report `statement N failed` with SQLSTATE): per-statement result tabs (`#N COMMAND · rows`), total + per-statement timing; results grid with type badges, per-profile+database persisted SQL/history/batch (`localStorage`, debounced, each result capped at 200 rows × 10 statements); 20-entry deduped history with clear + click-to-rerun; selection-following starter `SELECT * … LIMIT 100` until first edit/run; timing + row count + command + `rows affected` notice for writes; CSV export with BOM for Excel (native Save dialog via `@tauri-apps/plugin-dialog` + `plugin-fs` on desktop, anchor download in browser) |
+| **Import / export** | Table **CSV export** (paged `getTableData`, up to 50k rows, BOM CSV + native save) and **CSV import** (`CsvImportDialog`: file picker or paste, RFC-4180 parser in `src/lib/csv.ts`, header-name or positional mapping, `Empty → NULL` toggle, preview, chunked `importRows` in 500-row batches): multi-row `INSERT` in `db.rs` (quoted identifiers, literal values so payloads land as data, 1000 rows / ~10 MB per batch); query-result CSV export as before; full `pg_dump` restore still planned |
 | **Server** | Version, database size, table count, connections (`n / max`), uptime cards; notes that extensions / roles / vacuum / replication / locks panels are stubbed for the next milestone |
 | **Web preview vs desktop** | `isTauri()` checks **both** `__TAURI__` and `__TAURI_INTERNALS__`; browser (`npm run dev`) uses `src/lib/mock.ts` demo dataset (`demo_db` / `analytics` / `postgres`; `public` / `auth` / `billing`; incl. `order_summary` view), header shows `web preview · mock data`; desktop (`npm run tauri dev`) calls the Rust backend, header shows `desktop · live backend` |
 
@@ -67,12 +68,11 @@ Or build locally — see [BUILD.md](BUILD.md).
 | Extensions manager | Planned |
 | Roles / users manager | Planned |
 | EXPLAIN ANALYZE visualizer | Planned |
-| Multi-statement batches in editor | Planned (`execute_sql` prepares a single statement) |
-| Import / export (CSV, dump) | CSV export of query results done (with BOM + native dialog); full import/dump planned |
 | TLS (`sslmode=require`) | Accepted + validated, still connects via `NoTls` — see `TLS TODO` in `src-tauri/src/db.rs` |
+| Full dump / restore (pg_dump) | Planned (table + query CSV import/export done) |
 
 Extension points for these already exist (`FutureModule` in `src/types.ts`;
-modular command layer in `src-tauri/src/db.rs` — 24 thin `#[tauri::command]`
+modular command layer in `src-tauri/src/db.rs` — 26 thin `#[tauri::command]`
 wrappers in `src-tauri/src/main.rs` over `db.rs` operations).
 
 ## Architecture
@@ -91,13 +91,17 @@ Backend details: `pg_err` renders severity + SQLSTATE + message + detail/hint;
 `cell_to_json` maps `bool/int/float/numeric/text/uuid/json/bytea/date/time/ts`
 to JSON; rows are ctid-addressed (`ctid::text AS "__postiexplorer_ctid"`,
 strict `(block,offset)` validation); `quote_ident` + `quote_literal` /
-`json_to_literal` keep DDL/DML injection-safe; empty `profile.database`
+`json_to_literal` keep DDL/DML/import injection-safe; `split_statements`
+runs multi-statement batches (`'…'`/`"…"`, `--`/`/*…*/`, `$tag$…$tag$`
+aware, comment-only filtered, max 100); `importRows` builds multi-row
+`INSERT` (max 1000 rows / ~10 MB per call); empty `profile.database`
 connects to the `postgres` maintenance DB.
 
 Frontend details: `src/lib/api.ts` (`isTauri` dual-check, `effectiveProfile`,
 `connectionId` handle, identical signatures for Tauri/mock) ·
 `src/lib/profiles.ts` (`localStorage`) · `src/lib/download.ts` (Tauri native
-save vs anchor fallback, BOM CSV builder). Layout is `h-screen` flex with
+save vs anchor fallback, BOM CSV builder) · `src/lib/csv.ts` (RFC-4180
+`parseCsv` + header/positional `mapCsvToColumns`). Layout is `h-screen` flex with
 internal scroll (1280×800 window, 960px min width — no horizontal overflow).
 
 ## Quick start (development)
@@ -131,20 +135,24 @@ src/                  React frontend
                       per-profile+db query persist key
   assets/logo.svg     App logo (header)
   components/         Header, Sidebar (+ CreateTableDialog), DataGrid,
-                      TableDataView, RowEditorDialog, StructureView (+ ColumnDialog),
-                      ErDiagramView, QueryView, InfoView, ConnectionDialog, StatusBar
+                      TableDataView (+ CsvImportDialog for CSV import, Export button),
+                      RowEditorDialog, StructureView (+ ColumnDialog),
+                      ErDiagramView, QueryView (multi-statement tabs), InfoView,
+                      ConnectionDialog, StatusBar
   lib/api.ts          Tauri invoke wrapper + browser mock fallback (isTauri,
                       effectiveProfile, connectionId)
   lib/mock.ts         Demo dataset (used when Tauri IPC is absent)
   lib/profiles.ts     localStorage persistence for connection profiles
   lib/download.ts     Native save-dialog vs anchor download + BOM CSV builder
-  types.ts            Shared TS types (mirror of Rust models.rs + FutureModule stub)
+  lib/csv.ts          RFC-4180 parseCsv + mapCsvToColumns for imports
+  types.ts            Shared TS types (mirror of Rust models.rs + FutureModule stub
+                      + BatchQueryResult, IMPORT_BATCH_SIZE, EXPORT_MAX_ROWS)
 src-tauri/
   src/lib.rs          Library root (re-exports db + models for tests)
-  src/main.rs         24 thin Tauri commands (wrappers over db.rs)
+  src/main.rs         26 thin Tauri commands (wrappers over db.rs)
   src/db.rs           All SQL + connection pool (Arc<Mutex<Client>>)
   src/models.rs       Serde structs
-  tests/live_db.rs    Integration tests vs real PostgreSQL (7 tests)
+  tests/live_db.rs    Integration tests vs real PostgreSQL (11 tests)
   tauri.conf.json     Window (1280×800, min 960×600) + bundle config
   capabilities/default.json  Permissions
   icons/              App icons
@@ -175,14 +183,17 @@ Env overrides: `PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB` (defaults
 `localhost 5432 postgres postgres demo_db`).
 Reseed with `docker compose down -v && docker compose up -d`.
 
-`src-tauri/tests/live_db.rs` (7 tests) covers connect, empty-database picker
+`src-tauri/tests/live_db.rs` (11 tests) covers connect, empty-database picker
 flow, wrong-password (`28P01`) / wrong-database (`3D000`) errors, databases →
 schemas → tables → columns → paged/sorted rows → raw SQL → server info, ctid
 CRUD on a PK-less temp table (insert, injection-as-literal, update, stale-ctid
 failure, default reset, bulk delete; views read-only), owner privilege flags,
-readonly-role gating (reads allowed, DDL/DML denied server-side), and the full
+readonly-role gating (reads allowed, DDL/DML denied server-side), the full
 DDL flow (create → add → rename → alter type → nullable → default → drop
-column → drop table + validation rejections). CI runs the same suite on every
+column → drop table + validation rejections), multi-statement batches
+(splitter: quotes/comments/dollar-quotes, comment-only rejected, `statement N
+failed` with `42P01`), and CSV import (`importRows` multi-row INSERT,
+injection-as-literal, ragged/duplicate/unsafe validation). CI runs the same suite on every
 push (Linux job with `postgres:16` service + `seed.sql`).
 
 ## Contributing

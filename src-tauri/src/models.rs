@@ -76,7 +76,7 @@ pub struct TableDataResult {
     pub can_delete: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<serde_json::Value>>,
@@ -84,6 +84,12 @@ pub struct QueryResult {
     pub execution_ms: u64,
     pub command: String,
     pub notice: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchQueryResult {
+    pub results: Vec<QueryResult>,
+    pub execution_ms: u64,
 }
 
 #[derive(Debug, Serialize)]

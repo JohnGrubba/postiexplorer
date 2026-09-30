@@ -1,4 +1,5 @@
 import type {
+  BatchQueryResult,
   ColumnEntry,
   ConnectionProfile,
   DatabaseEntry,
@@ -113,6 +114,16 @@ export async function getTableData(
 export async function executeSql(sql: string): Promise<QueryResult> {
   if (!isTauri()) return mock.executeSql(sql);
   return invoke<QueryResult>("execute_sql", { connectionId, sql });
+}
+
+export async function executeSqlBatch(sql: string): Promise<BatchQueryResult> {
+  if (!isTauri()) return mock.executeSqlBatch(sql);
+  return invoke<BatchQueryResult>("execute_sql_batch", { connectionId, sql });
+}
+
+export async function importRows(schema: string, table: string, columns: string[], rows: unknown[][]): Promise<number> {
+  if (!isTauri()) return mock.importRows(schema, table, columns, rows);
+  return invoke<number>("import_rows", { connectionId, schema, table, columns, rows });
 }
 
 export async function insertRow(schema: string, table: string, values: Record<string, unknown>): Promise<number> {

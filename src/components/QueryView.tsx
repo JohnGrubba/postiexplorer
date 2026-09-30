@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, History, Play, Trash2 } from "lucide-react";
-import { executeSql } from "../lib/api";
+import { executeSqlBatch } from "../lib/api";
 import { buildCsv, downloadTextFile } from "../lib/download";
-import type { QueryResult } from "../types";
+import type { BatchQueryResult, QueryResult } from "../types";
 import DataGrid from "./DataGrid";
 
 const SAMPLE = `SELECT u.display_name, u.email, count(o.id) AS orders
@@ -17,6 +17,7 @@ const STORAGE_PREFIX = "postiexplorer.query.v1.";
 const SAVE_DEBOUNCE_MS = 400;
 /** Cap persisted result rows so one huge result can't blow the localStorage quota. */
 const MAX_STORED_ROWS = 200;
+const MAX_STORED_RESULTS = 10;
 
 function quoteIdent(id: string): string {
   return `"${id.replace(/"/g, '""')}"`;
@@ -31,23 +32,42 @@ function selectAllFor(schema: string | null, table: string | null): string {
 interface SavedQueryState {
   sql: string;
   history: string[];
-  result: QueryResult | null;
+  batch: BatchQueryResult | null;
+  activeIdx: number;
   touched?: boolean;
+}
+
+function capBatchForStorage(batch: BatchQueryResult | null): BatchQueryResult | null {
+  if (!batch) return null;
+  const results = batch.results.slice(0, MAX_STORED_RESULTS).map((r) => ({
+    ...r,
+    rows: r.rows.slice(0, MAX_STORED_ROWS),
+    row_count: r.rows.length > MAX_STORED_ROWS ? MAX_STORED_ROWS : r.row_count,
+  }));
+  return { results, execution_ms: batch.execution_ms };
 }
 
 function loadSavedState(key: string): SavedQueryState | null {
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<SavedQueryState>;
+    const parsed = JSON.parse(raw) as Partial<SavedQueryState> & { result?: QueryResult | null };
     const sql = typeof parsed.sql === "string" && parsed.sql.length > 0 ? parsed.sql : SAMPLE;
     const history = Array.isArray(parsed.history)
       ? parsed.history.filter((h): h is string => typeof h === "string").slice(0, HISTORY_LIMIT)
       : [];
-    const r = parsed.result;
-    const result =
-      r && typeof r === "object" && Array.isArray(r.columns) && Array.isArray(r.rows) ? (r as QueryResult) : null;
-    return { sql, history, result };
+    let batch: BatchQueryResult | null = null;
+    if (parsed.batch && typeof parsed.batch === "object" && Array.isArray(parsed.batch.results)) {
+      batch = parsed.batch as BatchQueryResult;
+    } else if (parsed.result && typeof parsed.result === "object" && Array.isArray(parsed.result.columns)) {
+      // Migrate pre-batch states (single QueryResult).
+      batch = { results: [parsed.result as QueryResult], execution_ms: (parsed.result as QueryResult).execution_ms ?? 0 };
+    }
+    const activeIdx =
+      typeof parsed.activeIdx === "number" && batch && parsed.activeIdx >= 0 && parsed.activeIdx < batch.results.length
+        ? parsed.activeIdx
+        : 0;
+    return { sql, history, batch, activeIdx };
   } catch {
     return null;
   }
@@ -55,16 +75,13 @@ function loadSavedState(key: string): SavedQueryState | null {
 
 function saveState(key: string, state: SavedQueryState) {
   try {
-    const storedResult =
-      state.result && state.result.rows.length > MAX_STORED_ROWS
-        ? { ...state.result, rows: state.result.rows.slice(0, MAX_STORED_ROWS) }
-        : state.result;
     localStorage.setItem(
       STORAGE_PREFIX + key,
       JSON.stringify({
         sql: state.sql,
         history: state.history.slice(0, HISTORY_LIMIT),
-        result: storedResult,
+        batch: capBatchForStorage(state.batch),
+        activeIdx: state.activeIdx,
         touched: state.touched ?? false,
       }),
     );
@@ -73,7 +90,7 @@ function saveState(key: string, state: SavedQueryState) {
     try {
       localStorage.setItem(
         STORAGE_PREFIX + key,
-        JSON.stringify({ sql: state.sql, history: state.history.slice(0, HISTORY_LIMIT), result: null }),
+        JSON.stringify({ sql: state.sql, history: state.history.slice(0, HISTORY_LIMIT), batch: null, activeIdx: 0 }),
       );
     } catch {
       /* ignore */
@@ -91,7 +108,8 @@ export default function QueryView({
   table: string | null;
 }) {
   const [sql, setSql] = useState(SAMPLE);
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const [batch, setBatch] = useState<BatchQueryResult | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -100,8 +118,8 @@ export default function QueryView({
   const keyRef = useRef(persistKey);
   /** True once the user typed, ran, or restored a previous session — gates selection-following. */
   const touchedRef = useRef(false);
-  const stateRef = useRef<SavedQueryState>({ sql, history, result, touched: false });
-  stateRef.current = { sql, history, result, touched: touchedRef.current };
+  const stateRef = useRef<SavedQueryState>({ sql, history, batch, activeIdx, touched: false });
+  stateRef.current = { sql, history, batch, activeIdx, touched: touchedRef.current };
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Restore persisted state on mount.
@@ -110,7 +128,8 @@ export default function QueryView({
     if (saved) {
       setSql(saved.sql);
       setHistory(saved.history);
-      setResult(saved.result);
+      setBatch(saved.batch);
+      setActiveIdx(saved.activeIdx);
       // A stored state implies a previous session even if it predates the touched flag.
       touchedRef.current = saved.touched ?? true;
     }
@@ -150,7 +169,8 @@ export default function QueryView({
       touchedRef.current = saved ? (saved.touched ?? true) : false;
       setSql(saved?.sql ?? selectAllFor(schema, table));
       setHistory(saved?.history ?? []);
-      setResult(saved?.result ?? null);
+      setBatch(saved?.batch ?? null);
+      setActiveIdx(saved?.activeIdx ?? 0);
       setError(null);
       return;
     }
@@ -165,7 +185,7 @@ export default function QueryView({
         timerRef.current = null;
       }
     };
-  }, [persistKey, sql, history, result, schema, table]);
+  }, [persistKey, sql, history, batch, activeIdx, schema, table]);
 
   async function run(query?: string) {
     const q = (query ?? sql).trim();
@@ -174,8 +194,9 @@ export default function QueryView({
     setRunning(true);
     setError(null);
     try {
-      const res = await executeSql(q);
-      setResult(res);
+      const res = await executeSqlBatch(q);
+      setBatch(res);
+      setActiveIdx(0);
       // Deduplicate: re-running (e.g. from history) moves the entry to the front.
       setHistory((h) => [q, ...h.filter((x) => x !== q)].slice(0, HISTORY_LIMIT));
     } catch (e) {
@@ -185,9 +206,11 @@ export default function QueryView({
     }
   }
 
+  const active: QueryResult | null = batch && batch.results.length > 0 ? (batch.results[Math.min(activeIdx, batch.results.length - 1)] ?? null) : null;
+
   async function exportCsv() {
-    if (!result || result.columns.length === 0) return;
-    const csv = buildCsv(result.columns, result.rows);
+    if (!active || active.columns.length === 0) return;
+    const csv = buildCsv(active.columns, active.rows);
     await downloadTextFile("query-result.csv", csv, "text/csv;charset=utf-8");
   }
 
@@ -195,10 +218,13 @@ export default function QueryView({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-2 border-b border-edge px-3 py-2">
         <div className="text-[13px] font-semibold text-white">SQL Editor</div>
+        <span className="hidden text-[11px] text-slate-500 lg:inline" title="Separate statements with ; — all run in order">
+          multi-statement supported
+        </span>
         <div className="flex-1" />
         <button
           onClick={exportCsv}
-          disabled={!result || result.columns.length === 0}
+          disabled={!active || active.columns.length === 0}
           className="flex h-8 items-center gap-1.5 rounded-lg border border-edge bg-white/5 px-2.5 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-40"
         >
           <Download size={13} /> CSV
@@ -230,16 +256,37 @@ export default function QueryView({
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-xs text-slate-500">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-1.5 text-xs text-slate-500">
             <span>Result</span>
-            {result && (
+            {batch && batch.results.length > 0 && (
               <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono">
-                {result.row_count} rows · {result.execution_ms} ms · {result.command}
+                {batch.results.length} statement{batch.results.length === 1 ? "" : "s"} · {batch.execution_ms} ms
               </span>
             )}
-            {result?.notice && <span className="truncate text-amber-300/80">{result.notice}</span>}
+            {active && (
+              <span className="rounded-full bg-white/5 px-2 py-0.5 font-mono">
+                {active.row_count} rows · {active.execution_ms} ms · {active.command}
+              </span>
+            )}
+            {active?.notice && <span className="truncate text-amber-300/80">{active.notice}</span>}
           </div>
-          <DataGrid columns={result?.columns ?? []} rows={result?.rows ?? []} emptyHint={result ? "Query returned no rows" : "Run a query to see results"} />
+          {batch && batch.results.length > 1 && (
+            <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-edge px-2 py-1.5">
+              {batch.results.map((r, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveIdx(i)}
+                  className={`shrink-0 rounded-lg px-2.5 py-1 font-mono text-[11px] ${
+                    i === activeIdx ? "bg-neon/20 text-white" : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                  }`}
+                  title={`Statement ${i + 1}: ${r.command}`}
+                >
+                  #{i + 1} {r.command} · {r.row_count}
+                </button>
+              ))}
+            </div>
+          )}
+          <DataGrid columns={active?.columns ?? []} rows={active?.rows ?? []} emptyHint={batch ? "Query returned no rows" : "Run a query to see results"} />
         </div>
         <div className="hidden w-[220px] shrink-0 flex-col overflow-hidden border-l border-edge bg-panel md:flex">
           <div className="flex shrink-0 items-center gap-1.5 border-b border-edge px-3 py-2 text-xs font-semibold text-slate-300">

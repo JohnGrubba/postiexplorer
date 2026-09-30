@@ -1,4 +1,5 @@
 import type {
+  BatchQueryResult,
   ColumnEntry,
   ConnectionProfile,
   DatabaseEntry,
@@ -138,6 +139,111 @@ const MOCK_ROWS: Record<string, unknown[][]> = {
 
 const VIEW_TABLES = new Set(["order_summary"]);
 
+/** Minimal top-level `;` splitter for mock batches (quotes/comments/dollar quotes). */
+function splitMockStatements(sql: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i];
+    if (c === "-" && sql[i + 1] === "-") {
+      while (i < n && sql[i] !== "\n") cur += sql[i++];
+      continue;
+    }
+    if (c === "/" && sql[i + 1] === "*") {
+      let depth = 1;
+      cur += "/*";
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
+          cur += "/*";
+          i += 2;
+        } else if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          cur += "*/";
+          i += 2;
+        } else cur += sql[i++];
+      }
+      continue;
+    }
+    if (c === "'") {
+      cur += c;
+      i++;
+      while (i < n) {
+        cur += sql[i];
+        if (sql[i] === "'") {
+          if (sql[i + 1] === "'") {
+            cur += sql[i + 1];
+            i += 2;
+            continue;
+          }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      cur += c;
+      i++;
+      while (i < n) {
+        cur += sql[i];
+        if (sql[i] === '"') {
+          if (sql[i + 1] === '"') {
+            cur += sql[i + 1];
+            i += 2;
+            continue;
+          }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === "$") {
+      const m = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(i));
+      if (m) {
+        const delim = m[0];
+        cur += delim;
+        i += delim.length;
+        const end = sql.indexOf(delim, i);
+        if (end === -1) {
+          cur += sql.slice(i);
+          i = n;
+        } else {
+          cur += sql.slice(i, end + delim.length);
+          i = end + delim.length;
+        }
+        continue;
+      }
+      cur += c;
+      i++;
+      continue;
+    }
+    if (c === ";") {
+      out.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    cur += c;
+    i++;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** True when a mock statement holds nothing but whitespace/comments/`;`. */
+function isMockEmpty(s: string): boolean {
+  let t = s.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  t = t.replace(/;/g, "").trim();
+  return t === "";
+}
+
 export const mock = {
   async testConnection(_p: ConnectionProfile): Promise<TestConnectionResult> {
     await delay(350);
@@ -241,6 +347,44 @@ export const mock = {
       };
     }
     return { columns: [], rows: [], row_count: 0, execution_ms: 6, command: "OK", notice: "Mock execution — connect to a live database for real results." };
+  },
+  async executeSqlBatch(sql: string): Promise<BatchQueryResult> {
+    const t0 = Date.now();
+    // Quote-aware split on top-level `;` (mirrors the backend splitter for
+    // the common cases: quotes, comments, dollar quotes).
+    const parts = splitMockStatements(sql).filter((s) => !isMockEmpty(s));
+    if (parts.length === 0) throw new Error("empty query");
+    if (parts.length > 100) throw new Error("too many statements (max 100 per batch)");
+    const results: QueryResult[] = [];
+    for (const part of parts) {
+      results.push(await mock.executeSql(part));
+    }
+    return { results, execution_ms: Date.now() - t0 };
+  },
+  async importRows(_schema: string, table: string, columns: string[], rows: unknown[][]): Promise<number> {
+    await delay(120);
+    if (VIEW_TABLES.has(table)) throw new Error("this view is read-only");
+    if (columns.length === 0) throw new Error("no columns provided");
+    if (rows.length === 0) throw new Error("no rows provided");
+    if (rows.length > 1000) throw new Error("too many rows per batch (max 1000 — split the import)");
+    const cols = columnsFor(table);
+    const store = (MOCK_ROWS[table] ??= []);
+    for (const r of rows) {
+      if (r.length !== columns.length) throw new Error(`row has ${r.length} values, expected ${columns.length}`);
+      const full = cols.map((c) => {
+        const idx = columns.findIndex((name) => name.toLowerCase() === c.name.toLowerCase());
+        if (idx >= 0) {
+          const v = r[idx];
+          // Empty mock cells behave like the backend: quoted literals cast
+          // on insert; empty string stays an empty string unless the caller
+          // passed null for NULL.
+          return v as unknown;
+        }
+        return c.default_value != null ? mockDefault(c) : null;
+      });
+      store.push(full);
+    }
+    return rows.length;
   },
   async getServerInfo(): Promise<ServerInfo> {
     await delay(150);
