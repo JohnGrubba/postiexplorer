@@ -46,10 +46,17 @@ code {
   white-space: nowrap;
 }
 .btn.primary {
-  background: linear-gradient(135deg, var(--neon), var(--viol)); color: #06121f;
-  box-shadow: 0 0 24px rgba(34, 211, 238, 0.25);
+  color: #06121f;
+  background-color: #5b7ff0; /* mid-tone fallback: no foreign strip can ever show through */
+  background-image: linear-gradient(135deg, var(--neon) 0%, var(--viol) 100%);
+  background-repeat: no-repeat;
+  box-shadow: 0 8px 22px rgba(2, 6, 16, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
-.btn.primary:hover { transform: translateY(-1px); box-shadow: 0 4px 32px rgba(34, 211, 238, 0.4); }
+.btn.primary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.07);
+  box-shadow: 0 12px 28px rgba(2, 6, 16, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
 .btn.ghost { border-color: var(--edge); color: var(--txt); background: rgba(148, 163, 184, 0.06); }
 .btn.ghost:hover { background: rgba(148, 163, 184, 0.12); }
 .btn.sm { padding: 8px 14px; font-size: 0.85rem; }
@@ -97,7 +104,7 @@ code {
 .fine { color: var(--mut); font-size: 0.85rem; }
 .fine.center { text-align: center; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0 26px; align-items: center; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; border-top: 1px solid var(--edge); padding-top: 20px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; border-top: 1px solid var(--edge); padding-top: 20px; }
 .stats div { display: flex; flex-direction: column; }
 .stats strong { font-size: 1.25rem; }
 .stats span { color: var(--mut); font-size: 0.82rem; }
@@ -152,6 +159,13 @@ code {
 .card h3 { font-size: 1.02rem; margin: 10px 0 6px; }
 .card p { color: var(--mut); font-size: 0.93rem; margin: 0 0 10px; }
 .card a { font-size: 0.9rem; font-weight: 600; text-decoration: none; }
+.card.wide { grid-column: 1 / -1; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.card.wide .wide-copy { flex: 1 1 280px; }
+.card.wide h3 { margin-top: 0; }
+.wide-stats { display: flex; gap: 28px; margin-left: auto; flex-wrap: wrap; }
+.wide-stats div { display: flex; flex-direction: column; }
+.wide-stats strong { font-size: 1.35rem; }
+.wide-stats span { color: var(--mut); font-size: 0.82rem; }
 .ic { font-size: 1.5rem; }
 .card.list ul, .checks ul { margin: 12px 0 16px; padding-left: 20px; color: var(--mut); font-size: 0.93rem; }
 .card.list li, .checks li { margin: 6px 0; }

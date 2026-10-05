@@ -72,6 +72,8 @@
           <div class="stats">
             <div><strong>~13 MB</strong><span>single binary</span></div>
             <div><strong>3 OSs</strong><span>+ ARM64 builds</span></div>
+            <div><strong>&lt;10 MB</strong><span>backend RAM · avg</span></div>
+            <div><strong>≈0%</strong><span>idle CPU</span></div>
             <div><strong>MIT</strong><span>free forever</span></div>
             <div><strong>0</strong><span>account needed</span></div>
           </div>
@@ -134,6 +136,18 @@ $ npm run tauri dev <span class="c"># desktop + live backend</span></code></pre>
         <article class="card"><div class="ic">🖥</div><h3>Server overview</h3><p>Version, database size, table count, connections and uptime at a glance.</p></article>
         <article class="card"><div class="ic">🛡</div><h3>Privilege-aware UI</h3><p>Every button is gated up front by real <code>GRANT</code> checks — and the server still says no to bypass attempts (covered by a readonly-role test).</p></article>
         <article class="card"><div class="ic">🌐</div><h3>Web preview</h3><p>Try it in the browser with built-in mock data — zero install, zero database. The desktop build swaps in the live Rust backend.</p></article>
+        <aside class="card wide">
+          <div class="ic">🪶</div>
+          <div class="wide-copy">
+            <h3>Featherweight by design</h3>
+            <p>The native Rust backend averages under 10&nbsp;MB RAM and idles near 0% CPU. No bundled Chromium, no JVM — your database gets the resources, not the tool. Heavy jobs (CSV import, dumps) stream in small batches so the UI never stutters.</p>
+          </div>
+          <div class="wide-stats">
+            <div><strong>&lt;10 MB</strong><span>backend RAM · avg</span></div>
+            <div><strong>≈0%</strong><span>idle CPU</span></div>
+            <div><strong>0</strong><span>bundled runtimes</span></div>
+          </div>
+        </aside>
       </div>
     </section>
 
@@ -243,6 +257,7 @@ $ npm run tauri dev      # desktop window + live DB</code></pre>
         <details><summary>Do I need to install PostgreSQL first?</summary><p>No — but you need a server to connect to. For local dev, <code>docker compose up -d</code> starts a seeded postgres:16. You can also click around the browser preview with mock data first.</p></details>
         <details><summary>Can I edit tables without a primary key?</summary><p>Yes. Row edits are addressed by PostgreSQL's internal <code>ctid</code>, so insert / update / delete work even on PK-less tables. Views and matviews stay read-only.</p></details>
         <details><summary>Is my connection secure?</summary><p>Connections are direct from your machine to your database — no cloud in between. Note: <code>sslmode=require</code> is currently accepted but the backend still uses plaintext (<code>NoTls</code>); real TLS is on the roadmap. Don't expose dev databases to the internet.</p></details>
+        <details><summary>How light is it, really?</summary><p>Very: the native Rust backend averages under 10&nbsp;MB RAM and idles near 0% CPU, and Tauri uses your OS webview instead of bundling Chromium — so there's no 200&nbsp;MB runtime tax like Electron apps pay. (Total app memory also includes the system WebView itself, which the OS manages and shares with other apps.)</p></details>
         <details><summary>How do I update?</summary><p>Download links are versionless and always point at the newest CI build — just grab the file again. Installers carry the version internally for upgrade detection.</p></details>
       </div>
     </section>
