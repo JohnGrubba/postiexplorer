@@ -1,0 +1,57 @@
+# Deploys the static marketing site in ./docs/ to GitHub Pages.
+#
+# Zero build step: docs/ is plain HTML/CSS/JS, so this workflow just uploads
+# it as a Pages artifact. Download links on the site always point at the
+# rolling `latest` GitHub Release produced by build.yml — no coupling needed.
+#
+# Trigger: every push to main that touches docs/ (or manual dispatch).
+# One-time repo setup: Settings → Pages → Source → "GitHub Actions".
+# The site then lives at https://johngrubba.github.io/postiexplorer/
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check docs links
+        run: |
+          set -e
+          test -f docs/index.html
+          # fail fast on broken internal references
+          grep -o 'href="\./[^"]*"' docs/index.html | sed 's/href="//;s/"//' | while read -r f; do
+            test -f "docs/$f" || { echo "missing docs asset: $f"; exit 1; }
+          done
+          grep -o 'src="\./[^"]*"' docs/index.html | sed 's/src="//;s/"//' | while read -r f; do
+            test -f "docs/$f" || { echo "missing docs asset: $f"; exit 1; }
+          done
+          echo "docs link check OK"
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+      - id: deployment
+        uses: actions/deploy-pages@v4

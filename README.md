@@ -3,12 +3,26 @@
   <h1>PostiExplorer</h1>
   <p>Modern single-binary PostgreSQL explorer — Tauri v2 (Rust) + React + TypeScript + Tailwind.</p>
   <p>
+    <a href="https://johngrubba.github.io/postiexplorer/"><strong>🌐 Website & downloads</strong></a> ·
+    <a href="https://github.com/JohnGrubba/postiexplorer/releases/latest">latest release</a>
+  </p>
+  <p>
     <a href="https://github.com/JohnGrubba/postiexplorer/actions/workflows/build.yml"><img src="https://github.com/JohnGrubba/postiexplorer/actions/workflows/build.yml/badge.svg" alt="build" /></a>
     <a href="https://github.com/JohnGrubba/postiexplorer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/JohnGrubba/postiexplorer" alt="license: MIT" /></a>
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-8b5cf6" alt="platforms" />
     <img src="https://img.shields.io/badge/postgres-16+-22d3ee" alt="postgres 16+" />
   </p>
 </div>
+
+## Website
+
+The marketing + download site lives in [`docs/`](docs/) (plain HTML/CSS/JS,
+zero build step) and auto-deploys to
+**https://johngrubba.github.io/postiexplorer/** via
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to
+`main` that touches `docs/`. One-time setup: repo Settings → Pages → Source →
+**GitHub Actions**. It auto-detects the visitor's OS for one-click downloads;
+all links point at the rolling `latest` release from `build.yml`.
 
 ## Download
 
@@ -161,6 +175,9 @@ src/                  React frontend
   types.ts            Shared TS types (mirror of Rust models.rs + FutureModule stub
                       + BatchQueryResult, TableDdl, RoleEntry/RoleListResult/
                       RoleMemberships/RoleOptions, IMPORT_BATCH_SIZE, EXPORT_MAX_ROWS)
+docs/                 GitHub Pages site (index.html + styles.css + app.js, no build):
+                      OS-detected smart download, full platform matrix, features,
+                      screenshots, FAQ — auto-deployed by .github/workflows/pages.yml
 src-tauri/
   src/lib.rs          Library root (re-exports db + models for tests)
   src/main.rs         34 thin Tauri commands (wrappers over db.rs)

@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PostiExplorer — Modern PostgreSQL Explorer</title>
+  <meta name="description" content="PostiExplorer is a fast, single-binary PostgreSQL explorer. Browse schemas, edit rows, diagram your ER model and run SQL — on Windows, Linux and macOS. Free and open source (MIT)." />
+  <meta property="og:title" content="PostiExplorer — Modern PostgreSQL Explorer" />
+  <meta property="og:description" content="Single-binary PostgreSQL explorer for Windows, Linux & macOS. Browse, edit, diagram, query. MIT open source." />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <a class="skip" href="#downloads">Skip to downloads</a>
+
+  <!-- ══ Nav ══ -->
+  <header class="nav" id="top">
+    <div class="wrap nav-in">
+      <a class="brand" href="#top" aria-label="PostiExplorer home">
+        <img src="./logo.svg" alt="" width="30" height="30" />
+        <span>PostiExplorer</span>
+        <span class="ver" id="navVersion" title="App version (package.json)">v1.0.0</span>
+      </a>
+      <nav class="links" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="#downloads">Downloads</a>
+        <a href="#quickstart">Quick start</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn ghost sm" href="https://github.com/JohnGrubba/postiexplorer" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.15c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.75 2.69 1.25 3.34.95.1-.75.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12v3.15c0 .3.21.67.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
+          Star
+        </a>
+        <a class="btn primary sm" href="#downloads" data-dl="primary-nav">Download</a>
+      </div>
+      <button class="burger" id="burger" aria-label="Open menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+    <div class="mobile-menu" id="mobileMenu">
+      <a href="#features">Features</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#downloads">Downloads</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/JohnGrubba/postiexplorer" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- ══ Hero ══ -->
+    <section class="hero wrap">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="pill"><span class="dot"></span><span id="releaseLine">MIT · Tauri v2 + React · single binary</span></p>
+          <h1>PostgreSQL,<br />finally <span class="grad">nice to explore.</span></h1>
+          <p class="lede">Browse schemas, edit rows without PKs, diagram your ER model and run multi-statement SQL — from one fast native binary. No Electron, no Java, no account.</p>
+          <div class="hero-actions">
+            <a class="btn primary lg" id="heroDownload" href="#downloads">Download for <span id="heroOs">your OS</span></a>
+            <a class="btn ghost lg" href="https://github.com/JohnGrubba/postiexplorer" target="_blank" rel="noopener">View on GitHub</a>
+          </div>
+          <p class="fine" id="heroSub">Detecting your platform…</p>
+          <div class="badges">
+            <a href="https://github.com/JohnGrubba/postiexplorer/actions/workflows/build.yml" target="_blank" rel="noopener"><img src="https://github.com/JohnGrubba/postiexplorer/actions/workflows/build.yml/badge.svg" alt="build status" /></a>
+            <a href="https://github.com/JohnGrubba/postiexplorer/blob/main/LICENSE" target="_blank" rel="noopener"><img src="https://img.shields.io/github/license/JohnGrubba/postiexplorer" alt="license: MIT" /></a>
+            <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-8b5cf6" alt="platforms: Windows, Linux, macOS" />
+            <img src="https://img.shields.io/badge/postgres-16+-22d3ee" alt="postgres 16+" />
+          </div>
+          <div class="stats">
+            <div><strong>~13 MB</strong><span>single binary</span></div>
+            <div><strong>3 OSs</strong><span>+ ARM64 builds</span></div>
+            <div><strong>MIT</strong><span>free forever</span></div>
+            <div><strong>0</strong><span>account needed</span></div>
+          </div>
+        </div>
+
+        <!-- Smart download card -->
+        <aside class="dl-card" aria-label="Download">
+          <div class="dl-head">
+            <img src="./logo.svg" alt="" width="40" height="40" />
+            <div>
+              <strong>PostiExplorer</strong>
+              <span id="dlVersion">latest release</span>
+            </div>
+            <span class="live" title="CI rebuilds installers on every push to main"><span class="dot"></span>auto-built</span>
+          </div>
+          <div class="dl-body">
+            <p class="detected">Detected: <strong id="osName">…</strong></p>
+            <a class="btn primary xl block" id="smartDownload" href="#downloads">Download</a>
+            <p class="fine center" id="smartSub">choosing the right file for you…</p>
+            <div class="dl-alt">
+              <a href="#downloads">All platforms &amp; formats ↓</a>
+              <span>·</span>
+              <a href="https://github.com/JohnGrubba/postiexplorer/releases/latest" target="_blank" rel="noopener">release notes</a>
+            </div>
+          </div>
+          <div class="term">
+            <div class="term-bar"><i></i><i></i><i></i><span>try the web preview</span></div>
+<pre><code>$ npm install
+$ npm run dev <span class="c"># mock data, no DB needed</span>
+$ docker compose up -d <span class="c"># local postgres:16</span>
+$ npm run tauri dev <span class="c"># desktop + live backend</span></code></pre>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ══ Logo strip ══ -->
+    <section class="strip">
+      <div class="wrap strip-in">
+        <span>BUILT WITH</span>
+        <strong>Tauri v2</strong><strong>Rust</strong><strong>React</strong><strong>TypeScript</strong><strong>tokio-postgres</strong><strong>Tailwind</strong>
+      </div>
+    </section>
+
+    <!-- ══ Features ══ -->
+    <section class="wrap section" id="features">
+      <p class="kicker">Features</p>
+      <h2>Everything you need. <span class="grad">Nothing you rent.</span></h2>
+      <p class="sub">One binary covers the full daily workflow — from first connection to ER diagram to SQL dump.</p>
+      <div class="grid">
+        <article class="card"><div class="ic">🔌</div><h3>Connections &amp; picker</h3><p>Saved profiles with test-connection, latency + server version. Leave the database empty to land on the <code>postgres</code> maintenance DB, then switch databases without reconnecting.</p></article>
+        <article class="card"><div class="ic">🗂</div><h3>Schema explorer</h3><p>Schemas, tables, views, matviews &amp; foreign tables with filters, row estimates, sizes, lock icons for missing privileges — per-schema failures never wipe the tree.</p></article>
+        <article class="card"><div class="ic">✏️</div><h3>Data editing, PK-optional</h3><p>Paginated grid with 3-state sort, multi-select bulk delete, and ctid-addressed editing that works even without primary keys. NULL / DEFAULT / Value modes per column.</p></article>
+        <article class="card"><div class="ic">🧱</div><h3>Structure (DDL) editing</h3><p>Create tables, add / rename / retype columns, manage NOT NULL &amp; defaults, drop columns &amp; tables — all privilege-gated, identifiers safely quoted.</p></article>
+        <article class="card"><div class="ic">🕸</div><h3>Interactive ER diagram</h3><p>Pan / zoom / drag-to-arrange canvas with 4 auto-layouts, search across tables <em>and</em> columns, isolate, SVG export and Mermaid copy.</p></article>
+        <article class="card"><div class="ic">⚡</div><h3>Multi-statement SQL</h3><p>Quote- and dollar-quote-aware batch runner with per-statement tabs, timing, history, persisted queries and BOM-correct CSV export.</p></article>
+        <article class="card"><div class="ic">📥</div><h3>CSV import &amp; export</h3><p>RFC-4180 import with header or positional mapping, preview and chunked 500-row batches — plus one-click table export up to 50k rows.</p></article>
+        <article class="card"><div class="ic">💾</div><h3>SQL dump &amp; restore</h3><p>Logical <code>.sql</code> dumps (DDL + parents-first INSERTs, views last) per database or per table, with chunked, progress-tracked restore.</p></article>
+        <article class="card"><div class="ic">👥</div><h3>Role manager</h3><p>Create / edit / drop LOGIN roles, manage memberships, connection limits and expiry — read-only pill for non-superusers, server-side enforcement.</p></article>
+        <article class="card"><div class="ic">🖥</div><h3>Server overview</h3><p>Version, database size, table count, connections and uptime at a glance.</p></article>
+        <article class="card"><div class="ic">🛡</div><h3>Privilege-aware UI</h3><p>Every button is gated up front by real <code>GRANT</code> checks — and the server still says no to bypass attempts (covered by a readonly-role test).</p></article>
+        <article class="card"><div class="ic">🌐</div><h3>Web preview</h3><p>Try it in the browser with built-in mock data — zero install, zero database. The desktop build swaps in the live Rust backend.</p></article>
+      </div>
+    </section>
+
+    <!-- ══ Screenshots ══ -->
+    <section class="wrap section" id="screenshots">
+      <p class="kicker">Screenshots</p>
+      <h2>Looks fast because <span class="grad">it is fast.</span></h2>
+      <p class="sub">Native window, GPU-composited diagram canvas, internal scrolling — verified at 1280×800 with no horizontal overflow.</p>
+      <div class="shots" id="shots"><!-- rendered by app.js --></div>
+    </section>
+
+    <!-- ══ Downloads ══ -->
+    <section class="wrap section" id="downloads">
+      <p class="kicker">Downloads</p>
+      <h2>Get PostiExplorer <span class="grad">for your platform.</span></h2>
+      <p class="sub" id="dlMeta">Free · MIT licensed · links always point at the rolling <a href="https://github.com/JohnGrubba/postiexplorer/releases/latest" target="_blank" rel="noopener"><code>latest</code> release</a>, rebuilt by CI on every push to <code>main</code>.</p>
+      <div class="os-tabs" role="tablist" aria-label="Operating system">
+        <button class="os-tab" data-os="windows" role="tab">Windows</button>
+        <button class="os-tab" data-os="linux" role="tab">Linux</button>
+        <button class="os-tab" data-os="macos" role="tab">macOS</button>
+      </div>
+      <div class="dl-grid" id="dlGrid"><!-- rendered by app.js --></div>
+      <div class="note">
+        <strong>Install notes</strong>
+        <ul>
+          <li><strong>Windows:</strong> run the <code>-setup.exe</code> installer, or just launch the portable <code>postiexplorer.exe</code> (WebView2 is preinstalled on Win10/11).</li>
+          <li><strong>Linux:</strong> <code>chmod +x PostiExplorer_amd64.AppImage &amp;&amp; ./PostiExplorer_amd64.AppImage</code> — or <code>sudo dpkg -i PostiExplorer_amd64.deb</code>.</li>
+          <li><strong>macOS (Apple Silicon):</strong> open the <code>.dmg</code> and drag PostiExplorer to Applications. No Intel build yet — build from source or vote in the issues.</li>
+          <li>File names carry <strong>no version</strong> on purpose, so these links never break. The running app shows its version in the header.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ══ Quick start ══ -->
+    <section class="wrap section" id="quickstart">
+      <p class="kicker">Developers</p>
+      <h2>Running from <span class="grad">source in 2 minutes.</span></h2>
+      <div class="cols">
+        <div class="term big">
+          <div class="term-bar"><i></i><i></i><i></i><span>quick start</span><button class="copy" data-copy="qs">copy</button></div>
+<pre id="qs"><code>$ npm install
+$ docker compose up -d   # postgres:16, seeds demo_db
+$ npm run dev            # web preview + mock data
+$ npm run tauri dev      # desktop window + live DB</code></pre>
+        </div>
+        <div class="checks">
+          <h3>Architecture — where code goes</h3>
+          <ul>
+            <li>All SQL lives in <code>src-tauri/src/db.rs</code>; <code>main.rs</code> commands are thin wrappers.</li>
+            <li>New feature = function in <code>db.rs</code> → <code>#[tauri::command]</code> → call in <code>src/lib/api.ts</code>.</li>
+            <li><code>src/types.ts</code> mirrors <code>src-tauri/src/models.rs</code> — change both.</li>
+            <li>Browser fallback via <code>src/lib/mock.ts</code> must never break <code>npm run dev</code>.</li>
+          </ul>
+          <a class="btn ghost sm" href="https://github.com/JohnGrubba/postiexplorer/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing guide →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ Roadmap ══ -->
+    <section class="wrap section" id="roadmap">
+      <p class="kicker">Roadmap</p>
+      <h2>Shipped <span class="grad">vs. next.</span></h2>
+      <div class="cols">
+        <div class="card list">
+          <h3>✅ Implemented</h3>
+          <ul>
+            <li>Connections, database picker, explorer</li>
+            <li>Data grid + ctid editing, structure / DDL</li>
+            <li>ER diagram, multi-statement query editor</li>
+            <li>CSV import / export, SQL dump &amp; restore</li>
+            <li>Role manager, server overview, privileges</li>
+            <li>Multi-OS CI with live-DB tests</li>
+          </ul>
+        </div>
+        <div class="card list">
+          <h3>🔜 On the roadmap</h3>
+          <ul>
+            <li>Functions / procedures explorer</li>
+            <li>Triggers explorer</li>
+            <li>Extensions manager</li>
+            <li>EXPLAIN ANALYZE visualizer</li>
+            <li>Real TLS encryption (<code>sslmode=require</code>)</li>
+          </ul>
+          <a class="btn ghost sm" href="https://github.com/JohnGrubba/postiexplorer/issues" target="_blank" rel="noopener">Request a feature →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ Community ══ -->
+    <section class="wrap section" id="community">
+      <p class="kicker">Open source</p>
+      <h2>Built in the open. <span class="grad">Join in.</span></h2>
+      <div class="grid three">
+        <article class="card"><div class="ic">🤝</div><h3>Contribute</h3><p>Bug reports and small, well-scoped PRs welcome. See the contributing guide and PR template.</p><a href="https://github.com/JohnGrubba/postiexplorer/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing →</a></article>
+        <article class="card"><div class="ic">🔒</div><h3>Security</h3><p>Please report vulnerabilities privately — see the security policy for supported versions.</p><a href="https://github.com/JohnGrubba/postiexplorer/blob/main/SECURITY.md" target="_blank" rel="noopener">Security policy →</a></article>
+        <article class="card"><div class="ic">📜</div><h3>License</h3><p>MIT © 2026 Jonas Grubbauer. Use it, fork it, ship it — attribution appreciated.</p><a href="https://github.com/JohnGrubba/postiexplorer/blob/main/LICENSE" target="_blank" rel="noopener">MIT license →</a></article>
+      </div>
+    </section>
+
+    <!-- ══ FAQ ══ -->
+    <section class="wrap section narrow" id="faq">
+      <p class="kicker">FAQ</p>
+      <h2>Questions, <span class="grad">answered.</span></h2>
+      <div class="faq" id="faqList">
+        <details open><summary>Is PostiExplorer really free?</summary><p>Yes — MIT licensed, no paywall, no account, no telemetry. Binaries are built in public by GitHub Actions on every push to <code>main</code>.</p></details>
+        <details><summary>Which platforms are supported?</summary><p>Windows x64 (+ ARM64 installer), Linux x64 (AppImage + .deb) and macOS Apple Silicon (.dmg). The site auto-detects your OS and picks the right file.</p></details>
+        <details><summary>Do I need to install PostgreSQL first?</summary><p>No — but you need a server to connect to. For local dev, <code>docker compose up -d</code> starts a seeded postgres:16. You can also click around the browser preview with mock data first.</p></details>
+        <details><summary>Can I edit tables without a primary key?</summary><p>Yes. Row edits are addressed by PostgreSQL's internal <code>ctid</code>, so insert / update / delete work even on PK-less tables. Views and matviews stay read-only.</p></details>
+        <details><summary>Is my connection secure?</summary><p>Connections are direct from your machine to your database — no cloud in between. Note: <code>sslmode=require</code> is currently accepted but the backend still uses plaintext (<code>NoTls</code>); real TLS is on the roadmap. Don't expose dev databases to the internet.</p></details>
+        <details><summary>How do I update?</summary><p>Download links are versionless and always point at the newest CI build — just grab the file again. Installers carry the version internally for upgrade detection.</p></details>
+      </div>
+    </section>
+
+    <!-- ══ Final CTA ══ -->
+    <section class="wrap section center">
+      <div class="cta">
+        <img src="./logo.svg" alt="" width="56" height="56" />
+        <h2>Stop wrestling your database.</h2>
+        <p>One download, thirty seconds, exploring.</p>
+        <div class="hero-actions center">
+          <a class="btn primary lg" href="#downloads" data-dl="primary-cta">Download PostiExplorer</a>
+          <a class="btn ghost lg" href="https://github.com/JohnGrubba/postiexplorer" target="_blank" rel="noopener">Star on GitHub</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot">
+      <div class="brand"><img src="./logo.svg" alt="" width="24" height="24" /><span>PostiExplorer</span></div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/JohnGrubba/postiexplorer" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/JohnGrubba/postiexplorer/releases/latest" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/JohnGrubba/postiexplorer/issues" target="_blank" rel="noopener">Issues</a>
+        <a href="https://github.com/JohnGrubba/postiexplorer/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+        <a href="https://github.com/JohnGrubba/postiexplorer/blob/main/SECURITY.md" target="_blank" rel="noopener">Security</a>
+        <a href="https://github.com/JohnGrubba/postiexplorer/blob/main/LICENSE" target="_blank" rel="noopener">MIT</a>
+      </nav>
+      <p class="fine">MIT © 2026 Jonas Grubbauer · Built with Tauri, tokio-postgres, React &amp; Tailwind · <span id="footVer">v1.0.0</span></p>
+    </div>
+  </footer>
+
+  <div class="lightbox" id="lightbox" aria-hidden="true"><img alt="" /><button aria-label="Close">✕</button></div>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>
