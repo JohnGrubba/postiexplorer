@@ -6,7 +6,6 @@
   var LATEST = "https://github.com/" + REPO + "/releases/latest";
   var DL = LATEST + "/download/";
   var RAW = "https://raw.githubusercontent.com/" + REPO + "/main/screenshots/";
-  var FALLBACK_VERSION = "1.0.0";
 
   var ASSETS = {
     winX64Setup: { file: "PostiExplorer_x64-setup.exe", label: "Installer (x64)", desc: "Guided setup for Windows 10/11 64-bit.", kind: "exe", size: "~3 MB" },
@@ -156,28 +155,6 @@
     box.addEventListener("click", function () { box.classList.remove("open"); box.setAttribute("aria-hidden", "true"); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") box.classList.remove("open"); });
   }
-
-  // ── Live version from GitHub API (graceful fallback) ──
-  function setVersion(v, when) {
-    ["navVersion", "footVer"].forEach(function (id) {
-      var el = document.getElementById(id);
-      if (el) el.textContent = id === "navVersion" ? "v" + v : "v" + v;
-    });
-    var dl = document.getElementById("dlVersion");
-    if (dl) dl.textContent = "v" + v + (when ? " · built " + when : " · latest release");
-    var rl = document.getElementById("releaseLine");
-    if (rl) rl.textContent = "v" + v + " · MIT · Tauri v2 + React · single binary";
-  }
-  setVersion(FALLBACK_VERSION, null);
-  fetch("https://api.github.com/repos/" + REPO + "/releases/latest")
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (j) {
-      if (!j || !j.tag_name) return;
-      var v = String(j.tag_name).replace(/^v/, "");
-      var when = j.published_at ? j.published_at.slice(0, 10) : null;
-      setVersion(v, when);
-    })
-    .catch(function () { /* offline / rate-limited: keep fallback */ });
 
   // ── Mobile menu + copy buttons ──
   var burger = document.getElementById("burger");
